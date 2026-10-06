@@ -91,7 +91,6 @@ async function refresh() {
     const tick = () => ($("pill-text").textContent = fmt(Date.now() - startedAt));
     tick();
     timer = setInterval(tick, 1000);
-    setMsg("Recording in progress");
   } else {
     $("pill-text").textContent = "Ready";
   }

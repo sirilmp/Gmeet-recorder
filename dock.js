@@ -337,6 +337,7 @@
   }
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.settings) applyVisibility();
+    if (area === "local" && changes.pipSize && changes.pipSize.newValue) pipSize = changes.pipSize.newValue;
     if (area === "session") sync();
   });
 

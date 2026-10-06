@@ -279,5 +279,5 @@ chrome.runtime.onMessage.addListener((m) => {
     watching = false;
     spkStop();
   }
-  if (kind !== "watch-leave" && !/^feed-/.test(kind || "")) window.postMessage({ src: "meetrec-ext", msg: m.msg }, "*");
+  if (kind !== "watch-leave") window.postMessage({ src: "meetrec-ext", msg: m.msg }, "*");
 });

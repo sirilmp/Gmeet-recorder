@@ -1034,6 +1034,7 @@ const askClosePlayer = closePlayer;
 $("pl-close").onclick = askClosePlayer;
 $("dlg-player").addEventListener("cancel", (e) => {
   e.preventDefault();
+  if (closeSpeakerEdit()) return;
   if (document.fullscreenElement) return;
   if ($("dlg-player").classList.contains("max")) return $("pl-max").click();
   askClosePlayer();
@@ -1474,6 +1475,7 @@ $("clip-go").onclick = async () => {
 // the state kept in storage: tr-<id> (done), trp-<id> (progress or error), trQueue and trState.
 let trActive = -1;
 let trSegs = [];
+let trBusy = false;
 let trCC = true;
 let trFind = null; // { re, at }: the library search that opened the player (words to mark, line to show)
 const trKey = (rec) => "tr-" + rec.startedAt;
@@ -1488,9 +1490,15 @@ const bgSend = (msg) => chrome.runtime.sendMessage({ target: "background", ...ms
 function renderTranscript(segs, busy = false) {
   segs = segs || [];
   for (const k of ["tr-copy", "tr-vtt", "tr-del"]) $(k).hidden = !segs.length || busy;
-  // progress updates re-read the same lines: only rebuild the list when it actually grew
-  const same = segs.length === trSegs.length && (!segs.length || segs[segs.length - 1].s === trSegs[trSegs.length - 1].s);
+  // progress updates re-read the same lines: only rebuild the list when it actually grew (or a name changed)
+  const names = (l) => l.map((x) => x.sp || "").join("\n");
+  const same =
+    busy === trBusy &&
+    segs.length === trSegs.length &&
+    (!segs.length || segs[segs.length - 1].s === trSegs[trSegs.length - 1].s) &&
+    names(segs) === names(trSegs);
   trSegs = segs;
+  trBusy = busy;
   const has = trSegs.length > 0;
   $("pl-cc").hidden = !has;
   $("pl-cc").classList.toggle("on", has && trCC);
@@ -1500,17 +1508,34 @@ function renderTranscript(segs, busy = false) {
   if (same && list.childElementCount === trSegs.length) return;
   trActive = -1;
   list.replaceChildren();
-  for (const sg of trSegs) {
+  // names can be set by hand once the transcript is finished (no names at all: only on hover)
+  const named = trSegs.some((x) => x.sp);
+  list.classList.toggle("named", named);
+  trSegs.forEach((sg, i) => {
     const row = el("div", "tr-line");
     row.dataset.s = sg.s;
-    row.append(el("b", "", stamp(sg.s)), el("span", "", trFind ? hl(sg.t, trFind.re) : esc(sg.t)));
+    const txt = el("span", "tr-txt");
+    if (sg.sp || !busy) {
+      const sp = el(busy ? "span" : "button", "tr-sp" + (sg.sp ? "" : " none") + (sg.sp && i && trSegs[i - 1].sp === sg.sp ? " same" : ""), esc(sg.sp || "+ Name"));
+      if (!busy) {
+        sp.type = "button";
+        sp.title = sg.sp ? "Change who said this" : "Say who said this";
+        sp.onclick = (e) => {
+          e.stopPropagation();
+          editSpeaker(i, row);
+        };
+      }
+      txt.append(sp);
+    }
+    txt.append(el("span", "", trFind ? hl(sg.t, trFind.re) : esc(sg.t)));
+    row.append(el("b", "", stamp(sg.s)), txt);
     row.onclick = () => {
       const v = $("pl-video");
       v.currentTime = sg.s;
       v.play().catch(() => {});
     };
     list.append(row);
-  }
+  });
   // Opened from a search result: bring that line into view
   if (trFind && trFind.at != null) {
     const i = trSegs.findIndex((x) => x.s === trFind.at);
@@ -1522,6 +1547,93 @@ function renderTranscript(segs, busy = false) {
     }
   }
   syncCaption();
+}
+
+// ---------- speaker names, set or changed by hand ----------
+// Opens a small editor under the line: a name (suggestions from the other lines), and for a line that
+// already has a name, whether to rename every line with that name (e.g. all of "You" -> "Siril").
+let spkEdit = null; // the open editor element
+
+function closeSpeakerEdit() {
+  if (!spkEdit) return false;
+  spkEdit.remove();
+  spkEdit = null;
+  return true;
+}
+
+function editSpeaker(i, row) {
+  closeSpeakerEdit();
+  const old = trSegs[i].sp || null;
+  const known = [...new Set(trSegs.map((x) => x.sp).filter(Boolean))];
+  const box = el("div", "tr-sp-edit");
+  box.onclick = (e) => e.stopPropagation();
+  const input = document.createElement("input");
+  input.className = "tr-sp-in";
+  input.placeholder = "Who said this?";
+  input.maxLength = 60;
+  input.value = old || "";
+  const chips = el("div", "tr-sp-chips");
+  for (const n of known)
+    if (n !== old) {
+      const c = el("button", "tr-sp-chip", esc(n));
+      c.type = "button";
+      c.onclick = () => save(n);
+      chips.append(c);
+    }
+  const count = old ? trSegs.filter((x) => x.sp === old).length : 0;
+  const all = document.createElement("label");
+  all.className = "tr-sp-all";
+  const allBox = document.createElement("input");
+  allBox.type = "checkbox";
+  allBox.checked = count > 1;
+  all.append(allBox, document.createTextNode(` Every line by “${old}” (${count})`));
+  all.hidden = count < 2;
+  const btns = el("div", "tr-sp-btns");
+  const mk = (label, cls, fn) => {
+    const b = el("button", "btn " + cls, label);
+    b.type = "button";
+    b.onclick = fn;
+    btns.append(b);
+  };
+  if (old) mk("Remove name", "", () => save(null));
+  btns.append(el("span", "spacer"));
+  mk("Cancel", "", closeSpeakerEdit);
+  mk("Save", "btn-primary", () => save(input.value));
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") save(input.value);
+    else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closeSpeakerEdit();
+    }
+  };
+  box.append(input, chips, all, btns);
+  if (!chips.childElementCount) chips.hidden = true;
+  row.append(box);
+  spkEdit = box;
+  input.focus();
+  input.select();
+
+  async function save(name) {
+    name = (name || "").trim().slice(0, 60) || null;
+    closeSpeakerEdit();
+    if (name === old && !(name && allBox.checked)) return;
+    const every = old && allBox.checked && count > 1;
+    // null (not missing) so the line isn't given a name again from the recording
+    const segs = trSegs.map((x, j) => (j === i || (every && x.sp === old) ? { ...x, sp: name } : x));
+    await saveSpeakers(segs);
+  }
+}
+
+async function saveSpeakers(segs) {
+  const rec = playerRec;
+  if (!rec) return;
+  const key = trKey(rec);
+  const cur = (await chrome.storage.local.get(key))[key];
+  if (!cur) return;
+  await chrome.storage.local.set({ [key]: { ...cur, segments: segs } }); // the storage listener re-renders
+  bgSend({ type: "tr-files", id: rec.startedAt }); // the .txt / .vtt in Downloads
+  if (rec.uploaded) syncPackage(rec, true);
 }
 
 async function loadTranscript(rec) {
@@ -1538,7 +1650,7 @@ async function loadTranscript(rec) {
   if (st) $("tr-fill").style.width = (st.pct || 0) + "%";
   if (ahead >= 0) {
     // waiting or being made: show the lines found so far
-    renderTranscript((prog && prog.segments) || [], true);
+    renderTranscript(labelSpeakers((prog && prog.segments) || [], rec.speakers), true);
     $("tr-gen").textContent = "Cancel";
     if (st) state(st.text || "Working…");
     else if (ahead === 0) state("Starting…");
@@ -1654,11 +1766,11 @@ async function paintTrChips() {
 }
 
 $("tr-copy").onclick = async () => {
-  await navigator.clipboard.writeText(trSegs.map((x) => `[${stamp(x.s)}] ${x.t}`).join("\n"));
+  await navigator.clipboard.writeText(trSegs.map((x) => `[${stamp(x.s)}] ${speakerText(x)}`).join("\n"));
   toast("Transcript copied");
 };
 $("tr-vtt").onclick = () => {
-  const body = "WEBVTT\n\n" + trSegs.map((x, i) => `${i + 1}\n${vttTime(x.s)} --> ${vttTime(x.e)}\n${x.t}\n`).join("\n");
+  const body = "WEBVTT\n\n" + trSegs.map((x, i) => `${i + 1}\n${vttTime(x.s)} --> ${vttTime(x.e)}\n${vttVoice(x)}\n`).join("\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([body], { type: "text/vtt" }));
   a.download = (playerRec ? playerRec.name : "transcript") + ".vtt";
@@ -1689,7 +1801,7 @@ function syncCaption() {
   }
   const cap = $("pl-cap");
   if (idx >= 0 && trCC) {
-    cap.replaceChildren(el("span", "", esc(trSegs[idx].t)));
+    cap.replaceChildren(el("span", "", esc(speakerText(trSegs[idx]))));
     cap.hidden = false;
   } else cap.hidden = true;
   if (idx !== trActive) {

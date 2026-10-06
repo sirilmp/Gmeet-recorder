@@ -109,7 +109,12 @@ function cleanMeta(raw) {
           at: num(tr.at) || Date.now(),
           segments: tr.segments
             .filter((x) => x && typeof x.t === "string")
-            .map((x) => ({ s: Math.max(0, num(x.s)), e: Math.max(0, num(x.e, num(x.s))), t: x.t.slice(0, 2000) })),
+            .map((x) => ({
+              s: Math.max(0, num(x.s)),
+              e: Math.max(0, num(x.e, num(x.s))),
+              t: x.t.slice(0, 2000),
+              ...(typeof x.sp === "string" && x.sp.trim() ? { sp: x.sp.trim().slice(0, 60) } : {}),
+            })),
         }
       : null,
   };

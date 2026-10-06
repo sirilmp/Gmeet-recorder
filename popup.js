@@ -67,6 +67,11 @@ async function renderDiag() {
   else if (diag.shareAudio === "pending") row("idle", "Share sound", "Connecting…");
   else if (diag.shareAudio === "none") row("bad", "Share sound", "None", "", "", "Tick “Share tab audio” when presenting.");
 
+  // Who Meet shows as talking: their name goes on the transcript lines
+  if (diag.speaker) row("ok", "Speaking", clean(diag.speaker), "", "Transcript lines get this name");
+  else if (diag.speakerTiles === 0) row("idle", "Speaking", "No tiles", "", "Meet's video tiles weren't found, so transcript lines won't have names. You can add them in the player.");
+  else if (diag.speakerTiles !== undefined) row("idle", "Speaking", "Nobody", "", "Transcript lines get the name of whoever is speaking");
+
   // Collapsed header: "All good", or how many things need a look
   const bad = rows.filter((r) => r.startsWith('<div class="st bad"')).length;
   const sum = $("diag-sum");

@@ -1,4 +1,4 @@
-importScripts("settings-lib.js", "drive.js");
+importScripts("settings-lib.js", "drive.js", "speakers-lib.js");
 
 const OFFSCREEN_URL = "offscreen.html";
 const FOLDER = "MeetRecordings"; // inside the browser's Downloads folder
@@ -131,7 +131,7 @@ async function start(tabId, useMic, name, mode, autoUpload, micId, presentScreen
   const startedAt = Date.now();
   const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
   await chrome.storage.session.set({ diag: {} });
-  await chrome.storage.session.remove(["upload", "marks"]);
+  await chrome.storage.session.remove(["upload", "marks", "spk"]);
   await ensureOffscreen();
   const res = await chrome.runtime.sendMessage({
     target: "offscreen",
@@ -191,6 +191,28 @@ async function addBookmark() {
   await chrome.storage.session.set({ marks });
   flashBadge("★" + marks.length);
   return true;
+}
+
+// Who is speaking, as the Meet page sees it (content.js): [ms from the start, name or null] each time
+// it changes. Kept next to the bookmarks and saved with the recording; the transcript lines take
+// their speaker names from it. One write at a time so quick changes don't overwrite each other.
+let spkChain = Promise.resolve();
+function addSpeaker(name, lag, tabId) {
+  spkChain = spkChain
+    .then(async () => {
+      const { recording, startedAt, recTabId, spk = [] } = await chrome.storage.session.get(["recording", "startedAt", "recTabId", "spk"]);
+      if (!recording || !startedAt || tabId !== recTabId) return;
+      name = typeof name === "string" && name.trim() ? name.trim().slice(0, 60) : null;
+      const at = Math.max(0, Date.now() - startedAt - Math.max(0, Math.min(5000, +lag || 0)));
+      const last = spk[spk.length - 1];
+      if (last && last[1] === name) return;
+      if (last && at <= last[0]) spk[spk.length - 1] = [last[0], name];
+      else spk.push([at, name]);
+      const { diag = {} } = await chrome.storage.session.get("diag");
+      await chrome.storage.session.set({ spk, diag: { ...diag, speaker: name || "" } });
+    })
+    .catch(() => {});
+  return spkChain;
 }
 
 // Start with the choices saved in the popup. Always the tab itself (the screen picker needs the popup).
@@ -288,9 +310,10 @@ async function beginSave({ durationMs, size, ext }) {
   ext = ext === "mp4" ? "mp4" : "webm";
   const { pending } = await chrome.storage.local.get("pending");
   const meta = pending || { name: "Meeting", startedAt: Date.now() - durationMs, mode: "tab" };
-  const { marks = [] } = await chrome.storage.session.get("marks");
+  const { marks = [], spk = [] } = await chrome.storage.session.get(["marks", "spk"]);
   const filename = `${meta.name} ${stamp(meta.startedAt)}.${ext}`;
   const saving = { name: meta.name, mode: meta.mode || "tab", startedAt: meta.startedAt, durationMs, size, filename, ext, bookmarks: marks };
+  if (spk.some((x) => x[1])) saving.speakers = spk;
   await chrome.storage.local.set({ saving });
   await chrome.storage.local.remove("pending");
   const { settings, driveConn } = await chrome.storage.local.get(["settings", "driveConn"]);
@@ -327,6 +350,7 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
         size: saving.size,
         ext: saving.ext || "webm",
         bookmarks: saving.bookmarks || [],
+        ...(saving.speakers ? { speakers: saving.speakers } : {}),
         uploaded: false,
         driveUrl: null,
         ...(saving.imported ? { imported: saving.imported } : {}),
@@ -360,6 +384,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       else if (msg.type === "drive-sync") Object.assign(out, await driveSync(msg.id));
       else if (msg.type === "stop") await stop();
       else if (msg.type === "bookmark") out.ok = await addBookmark();
+      else if (msg.type === "speaker") await addSpeaker(msg.name, msg.lag, _sender.tab && _sender.tab.id);
       else if (msg.type === "open-popup") {
         try {
           await chrome.action.openPopup();
@@ -487,6 +512,12 @@ async function onTranscriptMsg(msg) {
     await chrome.storage.local.remove(trpKey(id));
     if (trState && trState.id === id) await chrome.runtime.sendMessage({ target: "offscreen", type: "tr-abort", id }).catch(() => {});
   } else if (msg.type === "tr-next") return { ...(await trNext()) };
+  else if (msg.type === "tr-files") {
+    // speaker names changed in the player: rewrite the .txt / .vtt next to the video
+    const tr = (await chrome.storage.local.get("tr-" + id))["tr-" + id];
+    if (tr) await saveTranscriptFiles(id, tr.segments).catch((e) => console.warn("transcript files not saved", e));
+    return {};
+  }
   else if (!(await trIsCurrent(id))) return {}; // late report for a job that was cancelled
   else if (msg.type === "tr-state") await chrome.storage.local.set({ trState: { id, phase: msg.phase, pct: msg.pct, text: msg.text } });
   else if (msg.type === "tr-progress") {
@@ -497,6 +528,9 @@ async function onTranscriptMsg(msg) {
     });
   } else if (msg.type === "tr-done") {
     const p = (await chrome.storage.local.get(trpKey(id)))[trpKey(id)] || {};
+    const { recordings = [] } = await chrome.storage.local.get("recordings");
+    const rec = recordings.find((r) => r.startedAt === id);
+    msg.segments = labelSpeakers(msg.segments, rec && rec.speakers);
     await chrome.storage.local.set({ ["tr-" + id]: { model: p.model, lang: p.lang, at: Date.now(), segments: msg.segments } });
     await chrome.storage.local.remove(trpKey(id));
     await trRemove(id);
@@ -554,8 +588,8 @@ async function saveTranscriptFiles(id, segments) {
     return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:${p(Math.floor(ms / 1000) % 60)}`;
   };
   const vttTime = (s) => `${clock(s)}.${p(Math.round(s * 1000) % 1000, 3)}`;
-  const txt = segments.map((x) => `[${clock(x.s)}] ${x.t}`).join("\n") + "\n";
-  const vtt = "WEBVTT\n\n" + segments.map((x, i) => `${i + 1}\n${vttTime(x.s)} --> ${vttTime(Math.max(x.e, x.s))}\n${x.t}\n`).join("\n");
+  const txt = segments.map((x) => `[${clock(x.s)}] ${speakerText(x)}`).join("\n") + "\n";
+  const vtt = "WEBVTT\n\n" + segments.map((x, i) => `${i + 1}\n${vttTime(x.s)} --> ${vttTime(Math.max(x.e, x.s))}\n${vttVoice(x)}\n`).join("\n");
   // the service worker can't make blob: URLs, a data: URL is fine at transcript sizes
   const save = async (body, ext, type) => {
     const url = `data:${type};charset=utf-8,` + encodeURIComponent(body);

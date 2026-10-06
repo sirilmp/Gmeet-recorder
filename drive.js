@@ -378,7 +378,7 @@ function pkgMeta(rec, videoName, transcript, by, trPct) {
 function pkgTranscriptText(rec, segments, trPct) {
   const head = `${rec.name}\nRecorded ${new Date(rec.startedAt).toLocaleString()} · ${pkgClock(rec.durationMs || 0)}\n\n`;
   if (!segments) return head + `Transcript in progress (${Math.round(trPct)}% done). This file is replaced when it's finished.\n`;
-  return head + segments.map((x) => `[${pkgClock(x.s * 1000)}] ${x.t}`).join("\n") + "\n";
+  return head + segments.map((x) => `[${pkgClock(x.s * 1000)}] ${x.sp ? x.sp + ": " : ""}${x.t}`).join("\n") + "\n";
 }
 
 // Upload the small files next to the video. where = { folderId } (newer script) or { folder } (older one).

@@ -75,6 +75,122 @@ if (window === window.top) {
   }, 2000);
 }
 
+// ---------- who is speaking ----------
+// Meet marks every video tile with data-participant-id and writes the person's name in it. While
+// someone talks, the little sound bars in their tile are redrawn several times a second (Meet swaps
+// classes on them); a silent tile hardly changes. So the recorder counts the attribute changes inside
+// each tile and takes the busiest one as the speaker. Only changes go to the background (who, from
+// when), which keeps them next to the bookmarks; the transcript lines get their names from it later.
+const SPK_TICK = 400; // ms per check
+const SPK_BUSY = 3; // attribute changes per check that count as "talking"
+let spkObserver = null;
+let spkTimer = null;
+let spkChurn = new Map(); // tile -> changes since the last check
+let spkSaid = undefined; // the name last reported (null = nobody)
+let spkNext = null; // a new name seen once: switch when it's seen twice in a row
+let spkQuiet = 0; // checks in a row with nobody talking
+let spkTiles = -1;
+
+const toBackground = (msg) => {
+  try {
+    chrome.runtime.sendMessage({ target: "background", ...msg }).catch(() => {});
+  } catch {
+    /* extension was reloaded */
+  }
+};
+
+// The name label is marked notranslate (Google's convention for people's names); the tile's buttons
+// ("More options for Sweta") are the fallback
+function tileName(tile) {
+  for (const n of tile.querySelectorAll(".notranslate")) {
+    const t = n.textContent.trim();
+    if (t && t.length <= 60) return selfName(t);
+  }
+  for (const b of tile.querySelectorAll("[aria-label]")) {
+    const m = /(?:options for|^Pin) (.+?)(?: to your main screen)?$/i.exec(b.getAttribute("aria-label"));
+    if (m) return selfName(m[1].trim());
+  }
+  return null;
+}
+
+// My own tile says "You": use my Meet name when the page has it
+function selfName(t) {
+  t = t.replace(/\s*\((?:you|presentation|presenting)\)$/i, "").trim();
+  if (!/^you$/i.test(t)) return t;
+  const me = document.querySelector("[data-self-name]");
+  const n = me && me.getAttribute("data-self-name");
+  return n && !/^you$/i.test(n.trim()) ? n.trim() : "You";
+}
+
+// lag: how long ago it really changed (it takes a few checks to be sure)
+function spkReport(name, lag) {
+  if (name === spkSaid) return;
+  spkSaid = name;
+  toBackground({ type: "speaker", name, lag });
+}
+
+function spkCheck() {
+  const tiles = document.querySelectorAll("[data-participant-id]").length;
+  if (tiles !== spkTiles) {
+    spkTiles = tiles;
+    toBackground({ type: "diag", patch: { speakerTiles: tiles } });
+  }
+  // add up per person (one person can have more than one tile, or nested tile elements)
+  const byName = new Map();
+  for (const [tile, n] of spkChurn) {
+    if (!tile.isConnected) continue;
+    const name = tileName(tile);
+    if (name) byName.set(name, (byName.get(name) || 0) + n);
+  }
+  spkChurn = new Map();
+  let best = null;
+  let most = 0;
+  for (const [name, n] of byName)
+    if (n > most) {
+      best = name;
+      most = n;
+    }
+  if (most < SPK_BUSY) {
+    spkNext = null;
+    // a short pause between words is not "nobody"
+    if (++spkQuiet >= 4) spkReport(null, spkQuiet * SPK_TICK);
+    return;
+  }
+  spkQuiet = 0;
+  if (best === spkSaid) spkNext = null;
+  else if (best === spkNext) spkReport(best, 2 * SPK_TICK);
+  else if (spkSaid == null) spkReport(best, SPK_TICK);
+  else spkNext = best;
+}
+
+function spkStart() {
+  spkStop();
+  if (window !== window.top || !document.body) return;
+  spkObserver = new MutationObserver((list) => {
+    for (const r of list) {
+      const t = r.target;
+      if (t.nodeType !== 1 || t.tagName === "VIDEO") continue;
+      const tile = t.closest("[data-participant-id]");
+      // the tile itself changing (hover, layout) is not the sound bars
+      if (tile && tile !== t) spkChurn.set(tile, (spkChurn.get(tile) || 0) + 1);
+    }
+  });
+  spkObserver.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["class", "style"] });
+  spkTimer = setInterval(spkCheck, SPK_TICK);
+}
+
+function spkStop() {
+  if (spkObserver) spkObserver.disconnect();
+  clearInterval(spkTimer);
+  spkObserver = null;
+  spkTimer = null;
+  spkChurn = new Map();
+  spkSaid = undefined;
+  spkNext = null;
+  spkQuiet = 0;
+  spkTiles = -1;
+}
+
 chrome.runtime.onMessage.addListener((m) => {
   if (m.target !== "tab") return;
   const kind = m.msg && m.msg.kind;
@@ -85,9 +201,11 @@ chrome.runtime.onMessage.addListener((m) => {
     watching = true;
     seenInCall = false;
     missing = 0;
+    if (recording) spkStart();
   } else if (kind === "rec-stop") {
     recording = false;
     watching = false;
+    spkStop();
   }
   if (kind !== "watch-leave") window.postMessage({ src: "meetrec-ext", msg: m.msg }, "*");
 });

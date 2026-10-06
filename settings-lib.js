@@ -19,26 +19,48 @@ async function saveSettings(patch) {
   await chrome.storage.local.set({ settings: { ...(await getSettings()), ...patch } });
 }
 
-// Deletes local files (in Downloads) that the rules say are no longer needed. The entry stays in
-// the list (marked "local file deleted") so its Drive link is kept. Returns how many files were removed.
+// How old a recording is for the "older than N days" rule. Imported recordings count from the import.
+const recordingAge = (r) => Date.now() - (r.imported ? r.imported.at : r.startedAt);
+
+// The recordings the rules say to remove from this PC now. A recording whose transcript is still
+// being made waits until it is done (the transcript reads the copy kept inside the extension).
+async function cleanupCandidates(s) {
+  s = s || (await getSettings());
+  if (!s.deleteUploaded && !s.deleteAfterDays) return [];
+  const { recordings = [], trQueue = [] } = await chrome.storage.local.get(["recordings", "trQueue"]);
+  const queued = new Set(trQueue.map((x) => x.id));
+  return recordings.filter((r) => {
+    if (r.localDeleted || queued.has(r.startedAt)) return false;
+    const old = s.deleteAfterDays && recordingAge(r) > s.deleteAfterDays * 864e5;
+    return (s.deleteUploaded && r.uploaded) || old;
+  });
+}
+
+// Deletes local copies that the rules say are no longer needed: the file in Downloads/MeetRecordings
+// and the copy kept inside the extension. Nothing on Google Drive is touched, and the library entry
+// stays (marked "Removed from this PC") with its Drive link, transcript and bookmarks.
+// Returns how many recordings were removed.
 async function runCleanup() {
-  const s = await getSettings();
-  if (!s.deleteUploaded && !s.deleteAfterDays) return 0;
-  const { recordings = [] } = await chrome.storage.local.get("recordings");
-  let removed = 0;
-  let changed = false;
-  for (const r of recordings) {
-    if (r.localDeleted) continue;
-    const old = s.deleteAfterDays && Date.now() - r.startedAt > s.deleteAfterDays * 864e5;
-    if (!((s.deleteUploaded && r.uploaded) || old)) continue;
-    const found = await new Promise((res) => chrome.downloads.search({ id: r.downloadId }, res));
-    if (found[0] && found[0].exists) {
-      await new Promise((res) => chrome.downloads.removeFile(r.downloadId, res));
-      removed++;
+  const doomed = await cleanupCandidates();
+  if (!doomed.length) return 0;
+  let root = null;
+  try {
+    root = await navigator.storage.getDirectory();
+  } catch {}
+  for (const r of doomed) {
+    if (r.downloadId != null) {
+      const found = await new Promise((res) => chrome.downloads.search({ id: r.downloadId }, res));
+      if (found[0] && found[0].exists) await new Promise((res) => chrome.downloads.removeFile(r.downloadId, () => res(chrome.runtime.lastError)));
     }
-    r.localDeleted = true;
-    changed = true;
+    if (root) {
+      const ext = r.ext === "mp4" ? "mp4" : "webm";
+      for (const name of [`keep-${r.startedAt}.${ext}`, `trsrc-${r.startedAt}.${ext}`]) await root.removeEntry(name).catch(() => {});
+    }
   }
-  if (changed) await chrome.storage.local.set({ recordings });
-  return removed;
+  // Read the list again so a change made meanwhile (a new recording, an upload) is not lost
+  const ids = new Set(doomed.map((r) => r.startedAt));
+  const { recordings = [] } = await chrome.storage.local.get("recordings");
+  for (const r of recordings) if (ids.has(r.startedAt)) r.localDeleted = true;
+  await chrome.storage.local.set({ recordings });
+  return doomed.length;
 }

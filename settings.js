@@ -56,12 +56,28 @@ $("deleteUploaded").onchange = async () => {
 };
 $("deleteAfterDays").onchange = async () => {
   const days = Number($("deleteAfterDays").value);
-  if (days && !confirm(`Local files older than ${days} days will be deleted from your PC (also the ones not on Drive). Continue?`)) {
-    $("deleteAfterDays").value = String((await getSettings()).deleteAfterDays);
-    return;
+  const before = await getSettings();
+  if (days) {
+    const now = await cleanupCandidates({ ...before, deleteUploaded: false, deleteAfterDays: days });
+    const notOnDrive = now.filter((r) => !r.uploaded).length;
+    const lines = [
+      `Recordings older than ${days} days will be deleted from this PC automatically, from now on.`,
+      now.length ? `\n${now.length} recording${now.length === 1 ? " is" : "s are"} older than that and will be deleted right away.` : "",
+      notOnDrive ? `${notOnDrive} of them ${notOnDrive === 1 ? "is" : "are"} NOT on Google Drive and will be lost for good.` : "",
+      "\nNothing on Google Drive is deleted. Continue?",
+    ];
+    if (!confirm(lines.filter(Boolean).join("\n"))) {
+      $("deleteAfterDays").value = String(before.deleteAfterDays);
+      return;
+    }
   }
   await saveSettings({ deleteAfterDays: days });
   saved();
+  if (days) {
+    const n = await runCleanup();
+    if (n) $("cleanMsg").textContent = `Deleted ${n} recording${n === 1 ? "" : "s"} from this PC.`;
+    showUsage();
+  }
 };
 for (const k of ["autoRecord", "transcriptModel", "transcriptLang"])
   $(k).onchange = async () => {
@@ -75,7 +91,7 @@ $("quality").onchange = async () => {
 };
 $("clean").onclick = async () => {
   const n = await runCleanup();
-  $("cleanMsg").textContent = n ? `Deleted ${n} local file${n === 1 ? "" : "s"}.` : "Nothing to delete.";
+  $("cleanMsg").textContent = n ? `Deleted ${n} recording${n === 1 ? "" : "s"} from this PC.` : "Nothing to delete.";
   showUsage();
 };
 init();

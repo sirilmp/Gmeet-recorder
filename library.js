@@ -16,6 +16,7 @@ const ICON = {
   copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>',
   upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M6.5 9.5L12 4l5.5 5.5M4 20h16"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  clip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.1 8.1L20 20M8.1 15.9L20 4M14.5 14.5"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>',
 };
 
@@ -642,7 +643,8 @@ async function openDriveMenu(anchor, rec) {
   m.style.left = Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8)) + "px";
 }
 
-async function buildCard(rec) {
+// found: the search match ({ terms, hits }) when the list is filtered
+async function buildCard(rec, found) {
   const [item] = await search({ id: rec.downloadId });
   const exists = item && item.exists && item.state === "complete";
   const saving = item && item.state === "in_progress";
@@ -651,7 +653,7 @@ async function buildCard(rec) {
   card.append(el("div", "thumb", ICON.video));
 
   const info = el("div", "info");
-  const name = el("div", "name", `<span>${esc(rec.name)}</span>`);
+  const name = el("div", "name", `<span>${found ? hl(rec.name, termsRe(found.terms)) : esc(rec.name)}</span>`);
   name.append(el("span", "chip tab", rec.mode === "screen" ? "Screen" : "Meet tab"));
   if (rec.imported) {
     const chip = el("span", "chip tab", "Shared");
@@ -688,13 +690,15 @@ async function buildCard(rec) {
   if (rec.bookmarks && rec.bookmarks.length) {
     const marks = el("div", "marks");
     for (const { ms, note } of marksOf(rec)) {
-      const m = el("button", "mark", `${ICON.bookmark}${fmtDuration(ms)}${note ? `<span class="mn">${esc(note)}</span>` : ""}`);
+      const shown = found && note ? hl(note, termsRe(found.terms)) : esc(note);
+      const m = el("button", "mark", `${ICON.bookmark}${fmtDuration(ms)}${note ? `<span class="mn">${shown}</span>` : ""}`);
       m.title = note ? `${note}\nPlay from here` : "Play from here";
       m.onclick = () => playRecording(rec, item, ms / 1000);
       marks.append(m);
     }
     info.append(marks);
   }
+  if (found && found.hits.length) info.append(hitsBlock(rec, item, found, found.terms));
   card.append(info);
 
   const actions = el("div", "actions");
@@ -740,14 +744,91 @@ async function buildCard(rec) {
   return card;
 }
 
+// ---------- search: titles, bookmark notes and transcripts ----------
+// Transcripts are read from storage once, on the first search, then kept in step through
+// storage.onChanged (a finished, imported or deleted tr-<id>), so typing never re-reads them.
+const trIndex = new Map(); // startedAt -> [{ s, t, l }] (l: lowercased text)
+let trIndexLoad = null;
+function indexTranscript(id, tr) {
+  if (tr && tr.segments && tr.segments.length) trIndex.set(id, tr.segments.map((x) => ({ s: x.s, t: x.t, l: (x.t || "").toLowerCase() })));
+  else trIndex.delete(id);
+}
+function loadTrIndex(records) {
+  if (!trIndexLoad)
+    trIndexLoad = chrome.storage.local.get(records.map((r) => "tr-" + r.startedAt)).then((got) => {
+      for (const [k, v] of Object.entries(got)) indexTranscript(+k.slice(3), v);
+    });
+  return trIndexLoad;
+}
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !trIndexLoad) return;
+  let hit = false;
+  for (const [k, c] of Object.entries(changes)) {
+    if (!/^tr-\d+$/.test(k)) continue;
+    indexTranscript(+k.slice(3), c.newValue);
+    hit = true;
+  }
+  if (hit && searchTerms().length) render();
+});
+
+const searchTerms = () => $("search").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+const termsRe = (terms) => new RegExp(`(${terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "gi");
+// text with the search words wrapped in <mark>, escaped for innerHTML
+function hl(text, re) {
+  return String(text)
+    .split(re)
+    .map((part, i) => (i % 2 ? `<mark>${esc(part)}</mark>` : esc(part)))
+    .join("");
+}
+
+// Every word has to be somewhere in the recording (title, a note or the transcript). Returns null when
+// it isn't, else the transcript lines to show: the ones with all the words if any, else the ones with most.
+function matchRecording(rec, terms) {
+  const lines = trIndex.get(rec.startedAt) || [];
+  const head = (rec.name + "\n" + marksOf(rec).map((m) => m.note).join("\n")).toLowerCase();
+  const counts = lines.map((ln) => terms.reduce((n, t) => n + ln.l.includes(t), 0));
+  for (const t of terms) if (!head.includes(t) && !lines.some((ln) => ln.l.includes(t))) return null;
+  const best = Math.max(0, ...counts);
+  const hits = best ? lines.filter((_, i) => counts[i] === best) : [];
+  return { hits, all: best === terms.length };
+}
+
+const HITS_SHOWN = 3;
+function hitsBlock(rec, item, m, terms) {
+  const box = el("div", "hits");
+  const re = termsRe(terms);
+  for (const ln of m.hits.slice(0, HITS_SHOWN)) {
+    const b = el("button", "hit", `<b>${stamp(ln.s)}</b><span>${hl(ln.t, re)}</span>`);
+    b.type = "button";
+    b.title = "Play from here";
+    b.onclick = () => playRecording(rec, item, ln.s, { terms, at: ln.s });
+    box.append(b);
+  }
+  if (m.hits.length > HITS_SHOWN) {
+    const more = el("button", "hit-more", `${m.hits.length - HITS_SHOWN} more in the transcript`);
+    more.type = "button";
+    more.onclick = () => playRecording(rec, item, m.hits[0].s, { terms, at: m.hits[0].s });
+    box.append(more);
+  }
+  return box;
+}
+
 // Several renders can overlap (download events fire in bursts): only the newest one may draw,
 // and it swaps the whole list in one go, so cards are never added twice.
 let renderSeq = 0;
 async function render() {
   const seq = ++renderSeq;
   const all = (await getRecords()).sort((a, b) => b.startedAt - a.startedAt);
-  const q = $("search").value.trim().toLowerCase();
-  const records = q ? all.filter((r) => r.name.toLowerCase().includes(q)) : all;
+  const terms = searchTerms();
+  const q = terms.length > 0;
+  if (q) await loadTrIndex(all);
+  if (seq !== renderSeq) return;
+  const matches = new Map();
+  if (q) for (const r of all) {
+    const m = matchRecording(r, terms);
+    if (m) matches.set(r, m);
+  }
+  const records = q ? all.filter((r) => matches.has(r)) : all;
 
   // Group by calendar day (newest first)
   const groups = new Map();
@@ -773,7 +854,7 @@ async function render() {
     );
     day.append(summary);
     const body = el("div", "day-body");
-    for (const rec of recs) body.append(await buildCard(rec));
+    for (const rec of recs) body.append(await buildCard(rec, q ? { terms, ...matches.get(rec) } : null));
     if (seq !== renderSeq) return; // a newer render started
     day.append(body);
     day.ontoggle = () => {
@@ -788,6 +869,7 @@ async function render() {
   $("stat-count").textContent = all.length;
   $("stat-size").textContent = fmtSize(all.reduce((n, r) => n + (r.size || 0), 0));
   $("empty").hidden = all.length > 0;
+  $("no-hits").hidden = !all.length || !q || records.length > 0;
   $("list").replaceChildren(frag);
   paintTrChips();
   for (const id of uploading.keys()) showProgress(id);
@@ -943,6 +1025,7 @@ function closePlayer() {
   playerUrl = null;
   playerRec = null;
   playerBlob = null;
+  trFind = null;
   $("pl-cap").hidden = true;
   if ($("dlg-player").open) $("dlg-player").close();
 }
@@ -1027,7 +1110,11 @@ function renderMarks() {
     });
     del.type = "button";
     del.title = "Remove bookmark";
-    row.append(t, note, del);
+    const cut = btn(ICON.clip, "", "btn-ghost bm-clip", () => openClip(m.ms / 1000, m.note));
+    cut.type = "button";
+    cut.title = "Export a clip around this bookmark";
+    cut.setAttribute("aria-label", `Export a clip around the bookmark at ${fmtDuration(m.ms)}`);
+    row.append(t, note, cut, del);
     list.append(row);
   }
   paintPlayerTicks();
@@ -1110,6 +1197,8 @@ let paintPlayerTicks = () => {};
   $("pl-close").innerHTML = PI.close;
   $("pl-max").innerHTML = PI.max;
   $("bm-add").innerHTML = `${ICON.bookmark}Bookmark <span id="bm-at">0:00:00</span>`;
+  $("bm-cut").innerHTML = `${ICON.clip}Clip`;
+  $("bm-cut").onclick = () => openClip(v.currentTime, "");
   $("pl-pip").hidden = !document.pictureInPictureEnabled;
 
   v.addEventListener("play", () => ($("pl-play").innerHTML = PI.pause));
@@ -1222,6 +1311,164 @@ let paintPlayerTicks = () => {};
   });
 })();
 
+// ---------- export a short clip (around a bookmark, or any range) ----------
+// clip.js does the cutting: MP4 recordings are cut in a second without re-encoding (from the keyframe
+// at or just before "From"), WebM ones are played in the background and recorded again.
+let clipAt = 0;
+let clipSide = 0; // the "N s each side" button the range came from (0: typed or picked)
+let clipBusy = null; // AbortController while exporting
+const clipDur = () => {
+  const v = $("pl-video");
+  return isFinite(v.duration) && v.duration > 0 ? v.duration : playerRec ? playerRec.durationMs / 1000 : 0;
+};
+// "1:02:03", "12:30", "90" or "90.5" -> seconds (NaN if it isn't a time)
+function parseClock(text) {
+  const parts = String(text).trim().split(":");
+  if (!parts[0] || parts.length > 3 || parts.some((p) => !/^\d+(\.\d+)?$/.test(p))) return NaN;
+  return parts.reduce((acc, p) => acc * 60 + Number(p), 0);
+}
+function clipRange() {
+  return { from: parseClock($("clip-from").value), to: parseClock($("clip-to").value) };
+}
+function setClipRange(from, to) {
+  const d = clipDur();
+  from = Math.max(0, Math.floor(from));
+  to = d ? Math.min(Math.ceil(to), Math.ceil(d)) : Math.ceil(to);
+  $("clip-from").value = fmtDuration(from * 1000);
+  $("clip-to").value = fmtDuration(to * 1000);
+  paintClip();
+}
+function paintClip() {
+  const { from, to } = clipRange();
+  const d = clipDur();
+  const ok = from >= 0 && to > from && (!d || from < d);
+  $("clip-len").textContent = ok ? fmtDuration((Math.min(to, d || to) - from) * 1000) : "–";
+  $("clip-go").disabled = !ok || !!clipBusy;
+  for (const b of $("clip-presets").children) b.classList.toggle("on", Number(b.dataset.s) === clipSide);
+  $("clip-msg").textContent = !ok && $("clip-from").value && $("clip-to").value ? "“To” has to be after “From”, inside the recording." : "";
+}
+function clipState(busy, pct) {
+  $("clip-bar").hidden = !busy;
+  $("clip-fill").style.width = Math.round((pct || 0) * 100) + "%";
+  for (const id of ["clip-from", "clip-to", "clip-from-now", "clip-to-now"]) $(id).disabled = busy;
+  for (const b of $("clip-presets").children) b.disabled = busy;
+  $("clip-go").textContent = busy ? "Exporting…" : "Export clip";
+  paintClip();
+}
+
+function openClip(at, note) {
+  if (!playerRec || clipBusy) return;
+  clipAt = at;
+  $("pl-video").pause();
+  $("clip-sub").textContent = note ? `Around ${fmtDuration(at * 1000)} · ${note}` : `Around ${fmtDuration(at * 1000)}`;
+  $("clip-note").textContent =
+    extOf(playerRec) === "mp4"
+      ? "Saved as MP4 in the original quality. It starts on the nearest keyframe, up to 2 seconds before “From”."
+      : "This recording is WebM, so the clip is made by playing that part again: it takes as long as the clip.";
+  clipSide = 30;
+  setClipRange(at - 30, at + 30);
+  clipState(false);
+  $("dlg-clip").showModal();
+}
+
+$("clip-presets").onclick = (e) => {
+  const b = e.target.closest("button[data-s]");
+  if (!b) return;
+  clipSide = Number(b.dataset.s);
+  setClipRange(clipAt - clipSide, clipAt + clipSide);
+};
+$("clip-from").oninput = $("clip-to").oninput = () => {
+  clipSide = 0;
+  paintClip();
+};
+$("clip-from").onchange = $("clip-to").onchange = () => {
+  // tidy what was typed (90 -> 0:01:30) once it's a valid time
+  const { from, to } = clipRange();
+  if (from >= 0 && to > from) setClipRange(from, to);
+};
+$("clip-from-now").onclick = () => {
+  const { to } = clipRange();
+  const t = $("pl-video").currentTime;
+  clipSide = 0;
+  setClipRange(t, to > t ? to : t + 30);
+};
+$("clip-to-now").onclick = () => {
+  const { from } = clipRange();
+  const t = $("pl-video").currentTime;
+  clipSide = 0;
+  setClipRange(from < t ? from : Math.max(0, t - 30), t);
+};
+$("clip-cancel").onclick = () => (clipBusy ? clipBusy.abort() : $("dlg-clip").close());
+$("dlg-clip").addEventListener("cancel", (e) => {
+  e.preventDefault();
+  $("clip-cancel").click();
+});
+$("clip-from").onkeydown = $("clip-to").onkeydown = (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    $("clip-go").click();
+  }
+};
+
+$("clip-go").onclick = async () => {
+  const rec = playerRec;
+  const src = playerBlob;
+  let { from, to } = clipRange();
+  to = Math.min(to, clipDur() || to);
+  if (!rec || !src || !(to > from) || clipBusy) return;
+  const fast = extOf(rec) === "mp4";
+  let ext = fast ? "mp4" : MeetClip.againExt();
+  const stampOf = (s) => fmtDuration(s * 1000).replace(/:/g, "-");
+  const name = `${rec.name.replace(/[\\/:*?"<>|]+/g, " ").trim() || "Meeting"} clip ${stampOf(from)} to ${stampOf(to)}`;
+  // Ask where to save first: Chrome only shows the Save dialog right after the click
+  let handle = null;
+  if (window.showSaveFilePicker) {
+    try {
+      handle = await window.showSaveFilePicker({
+        id: "meetclip",
+        startIn: "downloads",
+        suggestedName: `${name}.${ext}`,
+        types: [{ description: "Video", accept: { [`video/${ext}`]: [`.${ext}`] } }],
+      });
+    } catch (e) {
+      if (e.name === "AbortError") return;
+      handle = null; // no Save dialog here: download it instead
+    }
+  }
+  clipBusy = new AbortController();
+  clipState(true, 0);
+  const onProgress = (p) => ($("clip-fill").style.width = Math.round(p * 100) + "%");
+  try {
+    let out = fast ? await MeetClip.cutMp4(src, from, to, { open: handle ? () => handle.createWritable() : null, onProgress }) : null;
+    if (!out) {
+      // not a file that can be cut directly: play that part again and record it
+      $("clip-note").textContent = "Recording the clip again: this takes as long as the clip.";
+      out = await MeetClip.recordAgain(src, from, to, { onProgress, signal: clipBusy.signal });
+      if (handle) {
+        const w = await handle.createWritable();
+        await w.write(out.blob);
+        await w.close();
+      }
+      ext = out.blob.type === "video/mp4" ? "mp4" : "webm";
+    }
+    if (!handle) {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(out.blob);
+      a.download = `${name}.${ext}`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+    }
+    $("dlg-clip").close();
+    toast(handle ? `Clip saved: ${handle.name}` : "Clip saved to Downloads");
+  } catch (e) {
+    if (e.name === "AbortError") $("dlg-clip").close();
+    else $("clip-msg").textContent = "Couldn't export the clip: " + (e.message || e);
+  } finally {
+    clipBusy = null;
+    if ($("dlg-clip").open) clipState(false);
+  }
+};
+
 // ---------- transcript (speech-to-text on this PC) ----------
 // Transcripts are made in the background (transcriber.js in the recorder's offscreen page, queued by
 // background.js), so they keep going when the player or the library is closed. This panel only shows
@@ -1230,6 +1477,7 @@ let trActive = -1;
 let trSegs = [];
 let trBusy = false;
 let trCC = true;
+let trFind = null; // { re, at }: the library search that opened the player (words to mark, line to show)
 const trKey = (rec) => "tr-" + rec.startedAt;
 const stamp = (s) => fmtDuration(s * 1000);
 const vttTime = (s) => {
@@ -1279,7 +1527,7 @@ function renderTranscript(segs, busy = false) {
       }
       txt.append(sp);
     }
-    txt.append(document.createTextNode(sg.t));
+    txt.append(el("span", "", trFind ? hl(sg.t, trFind.re) : esc(sg.t)));
     row.append(el("b", "", stamp(sg.s)), txt);
     row.onclick = () => {
       const v = $("pl-video");
@@ -1288,6 +1536,16 @@ function renderTranscript(segs, busy = false) {
     };
     list.append(row);
   });
+  // Opened from a search result: bring that line into view
+  if (trFind && trFind.at != null) {
+    const i = trSegs.findIndex((x) => x.s === trFind.at);
+    if (i >= 0) {
+      const row = list.children[i];
+      row.classList.add("found");
+      requestAnimationFrame(() => (list.scrollTop = row.offsetTop - list.offsetTop - list.clientHeight / 3));
+      trFind.at = null;
+    }
+  }
   syncCaption();
 }
 
@@ -1560,7 +1818,8 @@ function syncCaption() {
 $("pl-video").addEventListener("timeupdate", syncCaption);
 $("pl-video").addEventListener("seeked", syncCaption);
 
-async function playRecording(rec, item, startAt) {
+// find: { terms, at } when opened from a search result
+async function playRecording(rec, item, startAt, find) {
   const dlg = $("dlg-player");
   $("pl-title").textContent = rec.name;
   $("pl-sub").textContent = `${fmtDateTime(rec.startedAt)} · ${fmtDuration(rec.durationMs)}`;
@@ -1571,6 +1830,7 @@ async function playRecording(rec, item, startAt) {
   playerRec = rec;
   v.removeAttribute("src");
   trSegs = [];
+  trFind = find ? { re: termsRe(find.terms), at: find.at } : null;
   loadTranscript(rec);
   renderMarks();
   try {
@@ -1594,7 +1854,11 @@ async function playRecording(rec, item, startAt) {
   }
 }
 
-$("search").oninput = () => render();
+let searchTimer = 0;
+$("search").oninput = () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(render, 120);
+};
 renderDriveBtn();
 checkScript();
 pruneKept().then(showRecover);

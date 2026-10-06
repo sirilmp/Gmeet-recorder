@@ -362,6 +362,7 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
       const hasTr = !!(await chrome.storage.local.get(trK))[trK];
       const senderBusy = saving.imported && saving.imported.trStatus === "in-progress";
       if ((await getSettings()).autoTranscribe && !hasTr && !senderBusy) trAdd(saving.startedAt, saving.ext).catch(() => {});
+      runCleanup().catch(() => {}); // a new recording is a good moment to free space
     }
     suggest({
       filename: `${FOLDER}/${saving ? saving.filename : item.filename}`,
@@ -604,12 +605,25 @@ async function saveTranscriptFiles(id, segments) {
   await save(vtt, "vtt", "text/vtt");
 }
 
+// Auto-delete: apply the Storage rules in Settings without the library being open.
+// Runs when the browser starts, a few times a day, and after each new recording is saved.
+const CLEANUP_ALARM = "cleanup";
+async function cleanupSoon() {
+  if (!(await chrome.alarms.get(CLEANUP_ALARM))) chrome.alarms.create(CLEANUP_ALARM, { delayInMinutes: 1, periodInMinutes: 360 });
+  runCleanup().catch((e) => console.warn("cleanup failed", e));
+}
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === CLEANUP_ALARM) runCleanup().catch((e) => console.warn("cleanup failed", e));
+});
+
 chrome.runtime.onStartup.addListener(async () => {
+  cleanupSoon();
   await setState(false);
   await chrome.storage.local.remove("trState");
   await trKick(); // finish transcripts the browser closed on
 });
 chrome.runtime.onInstalled.addListener(async () => {
+  cleanupSoon();
   await setState(false);
   await trKick();
 });

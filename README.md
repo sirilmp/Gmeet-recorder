@@ -19,6 +19,7 @@ the extension, and uploads to Google Drive on demand. No backend required.
 Icon → **My recordings & Drive upload**. Per recording: **Open** (default video player),
 **Show in folder**, **Upload to Drive**, **Delete**. Uploaded items get an "On Drive" badge and a link.
 
+<<<<<<< HEAD
 ## Who said what
 While recording, the extension watches Meet's video tiles and notes who is talking (the sound bars in a
 person's tile move while they speak). The transcript lines then start with that name, e.g.
@@ -28,6 +29,14 @@ Live status shows who it sees speaking right now.
   Two people talking at once get one name.
 - In the player, click a name to change it (for all of that person's lines at once, e.g. "You" → your
   name), or hover a line without one and click **+ Name**.
+=======
+## Export a clip
+In the player, the scissors next to a bookmark export a short clip around it (30 s each side by default;
+15 s, 1 min or 2 min with one click, or type any From/To). **Clip** above the bookmarks does the same
+around the current position. Chrome asks where to save it. MP4 recordings are cut in about a second
+without re-encoding (the clip starts on the keyframe at or up to 2 s before From); older WebM recordings
+are played in the background and recorded again, which takes as long as the clip.
+>>>>>>> origin/main
 
 ## Google Drive setup (one time)
 1. Google Cloud Console → new project → enable **Google Drive API**.

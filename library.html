@@ -207,8 +207,23 @@
     .bm-note::placeholder { color: var(--faint); }
     .bm-note:hover { border-color: var(--border); }
     .bm-note:focus { outline: none; border-color: var(--border-strong); background: var(--surface); box-shadow: 0 0 0 3px var(--focus); }
-    .bm-del { width: 28px; height: 28px; padding: 0; color: var(--faint); }
-    .bm-del svg { width: 14px; height: 14px; }
+    .bm-del, .bm-clip { width: 28px; height: 28px; padding: 0; color: var(--faint); }
+    .bm-del svg, .bm-clip svg { width: 14px; height: 14px; }
+    .bm-clip:hover { color: var(--text); }
+    #bm-cut svg { width: 13px; height: 13px; }
+    /* Export a clip */
+    .clip-presets { display: flex; gap: 6px; flex-wrap: wrap; }
+    .clip-presets .btn { height: 28px; padding: 0 10px; font-size: 12.5px; }
+    .clip-presets .btn.on { border-color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
+    .clip-range { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; }
+    .clip-range .field-label { display: flex; justify-content: space-between; align-items: baseline; }
+    .clip-range .linkbtn { font-weight: 500; font-size: 12px; color: var(--muted); }
+    .clip-range .input { width: 100%; box-sizing: border-box; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .clip-len { padding-bottom: 9px; color: var(--muted); font-size: 13px; white-space: nowrap; }
+    .clip-len b { color: var(--text); font: 600 13px var(--mono); font-variant-numeric: tabular-nums; }
+    .clip-note { color: var(--muted); font-size: 12.5px; margin: 0; }
+    #clip-msg:empty { display: none; }
+    @media (max-width: 480px) { .clip-range { grid-template-columns: 1fr 1fr; } .clip-len { grid-column: 1 / -1; padding: 0; } }
 
     @media (max-width: 860px) {
       dialog.player { height: 94vh; }
@@ -417,6 +432,7 @@
         <section class="bm">
           <div class="bm-head">
             <b>Bookmarks</b><span class="tr-state" id="bm-count"></span><span class="spacer"></span>
+            <button type="button" class="btn" id="bm-cut" title="Export a short clip from this recording"></button>
             <button type="button" class="btn" id="bm-add" title="Bookmark this moment (B or Alt+Shift+B)"></button>
           </div>
           <div class="bm-empty" id="bm-empty">Mark a moment to come back to it, and add a note so you remember why.</div>
@@ -439,6 +455,37 @@
     </div>
   </dialog>
 
+  <dialog id="dlg-clip">
+    <form method="dialog" class="dlg">
+      <h2>Export clip</h2>
+      <div class="sub" id="clip-sub"></div>
+      <div class="clip-presets" id="clip-presets" role="group" aria-label="Around this moment">
+        <button type="button" class="btn" data-s="15">15 s each side</button>
+        <button type="button" class="btn" data-s="30">30 s each side</button>
+        <button type="button" class="btn" data-s="60">1 min each side</button>
+        <button type="button" class="btn" data-s="120">2 min each side</button>
+      </div>
+      <div class="clip-range">
+        <div>
+          <label class="field-label" for="clip-from">From <button type="button" class="linkbtn" id="clip-from-now">Use player time</button></label>
+          <input class="input" id="clip-from" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="0:00:00">
+        </div>
+        <div>
+          <label class="field-label" for="clip-to">To <button type="button" class="linkbtn" id="clip-to-now">Use player time</button></label>
+          <input class="input" id="clip-to" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="0:00:00">
+        </div>
+        <div class="clip-len">Length <b id="clip-len">0:00:00</b></div>
+      </div>
+      <p class="clip-note" id="clip-note"></p>
+      <div class="tr-bar" id="clip-bar" hidden><i id="clip-fill"></i></div>
+      <div class="dlg-msg err" id="clip-msg"></div>
+      <div class="dlg-row">
+        <button type="button" class="btn" id="clip-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="clip-go">Export clip</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="dlg-upload">
     <form method="dialog" class="dlg">
       <h2>Upload to Google Drive</h2>
@@ -457,6 +504,7 @@
   </dialog>
   <script src="settings-lib.js"></script><script src="drive.js"></script>
   <script src="webm-fix.js"></script>
+  <script src="vendor/mp4-muxer.js"></script><script src="clip.js"></script>
   <script src="library.js"></script>
   <script src="share-import.js"></script>
 </body>

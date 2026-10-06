@@ -16,6 +16,7 @@ const ICON = {
   copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>',
   upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M6.5 9.5L12 4l5.5 5.5M4 20h16"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  clip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.1 8.1L20 20M8.1 15.9L20 4M14.5 14.5"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>',
 };
 
@@ -1108,7 +1109,11 @@ function renderMarks() {
     });
     del.type = "button";
     del.title = "Remove bookmark";
-    row.append(t, note, del);
+    const cut = btn(ICON.clip, "", "btn-ghost bm-clip", () => openClip(m.ms / 1000, m.note));
+    cut.type = "button";
+    cut.title = "Export a clip around this bookmark";
+    cut.setAttribute("aria-label", `Export a clip around the bookmark at ${fmtDuration(m.ms)}`);
+    row.append(t, note, cut, del);
     list.append(row);
   }
   paintPlayerTicks();
@@ -1191,6 +1196,8 @@ let paintPlayerTicks = () => {};
   $("pl-close").innerHTML = PI.close;
   $("pl-max").innerHTML = PI.max;
   $("bm-add").innerHTML = `${ICON.bookmark}Bookmark <span id="bm-at">0:00:00</span>`;
+  $("bm-cut").innerHTML = `${ICON.clip}Clip`;
+  $("bm-cut").onclick = () => openClip(v.currentTime, "");
   $("pl-pip").hidden = !document.pictureInPictureEnabled;
 
   v.addEventListener("play", () => ($("pl-play").innerHTML = PI.pause));
@@ -1302,6 +1309,164 @@ let paintPlayerTicks = () => {};
     e.preventDefault();
   });
 })();
+
+// ---------- export a short clip (around a bookmark, or any range) ----------
+// clip.js does the cutting: MP4 recordings are cut in a second without re-encoding (from the keyframe
+// at or just before "From"), WebM ones are played in the background and recorded again.
+let clipAt = 0;
+let clipSide = 0; // the "N s each side" button the range came from (0: typed or picked)
+let clipBusy = null; // AbortController while exporting
+const clipDur = () => {
+  const v = $("pl-video");
+  return isFinite(v.duration) && v.duration > 0 ? v.duration : playerRec ? playerRec.durationMs / 1000 : 0;
+};
+// "1:02:03", "12:30", "90" or "90.5" -> seconds (NaN if it isn't a time)
+function parseClock(text) {
+  const parts = String(text).trim().split(":");
+  if (!parts[0] || parts.length > 3 || parts.some((p) => !/^\d+(\.\d+)?$/.test(p))) return NaN;
+  return parts.reduce((acc, p) => acc * 60 + Number(p), 0);
+}
+function clipRange() {
+  return { from: parseClock($("clip-from").value), to: parseClock($("clip-to").value) };
+}
+function setClipRange(from, to) {
+  const d = clipDur();
+  from = Math.max(0, Math.floor(from));
+  to = d ? Math.min(Math.ceil(to), Math.ceil(d)) : Math.ceil(to);
+  $("clip-from").value = fmtDuration(from * 1000);
+  $("clip-to").value = fmtDuration(to * 1000);
+  paintClip();
+}
+function paintClip() {
+  const { from, to } = clipRange();
+  const d = clipDur();
+  const ok = from >= 0 && to > from && (!d || from < d);
+  $("clip-len").textContent = ok ? fmtDuration((Math.min(to, d || to) - from) * 1000) : "–";
+  $("clip-go").disabled = !ok || !!clipBusy;
+  for (const b of $("clip-presets").children) b.classList.toggle("on", Number(b.dataset.s) === clipSide);
+  $("clip-msg").textContent = !ok && $("clip-from").value && $("clip-to").value ? "“To” has to be after “From”, inside the recording." : "";
+}
+function clipState(busy, pct) {
+  $("clip-bar").hidden = !busy;
+  $("clip-fill").style.width = Math.round((pct || 0) * 100) + "%";
+  for (const id of ["clip-from", "clip-to", "clip-from-now", "clip-to-now"]) $(id).disabled = busy;
+  for (const b of $("clip-presets").children) b.disabled = busy;
+  $("clip-go").textContent = busy ? "Exporting…" : "Export clip";
+  paintClip();
+}
+
+function openClip(at, note) {
+  if (!playerRec || clipBusy) return;
+  clipAt = at;
+  $("pl-video").pause();
+  $("clip-sub").textContent = note ? `Around ${fmtDuration(at * 1000)} · ${note}` : `Around ${fmtDuration(at * 1000)}`;
+  $("clip-note").textContent =
+    extOf(playerRec) === "mp4"
+      ? "Saved as MP4 in the original quality. It starts on the nearest keyframe, up to 2 seconds before “From”."
+      : "This recording is WebM, so the clip is made by playing that part again: it takes as long as the clip.";
+  clipSide = 30;
+  setClipRange(at - 30, at + 30);
+  clipState(false);
+  $("dlg-clip").showModal();
+}
+
+$("clip-presets").onclick = (e) => {
+  const b = e.target.closest("button[data-s]");
+  if (!b) return;
+  clipSide = Number(b.dataset.s);
+  setClipRange(clipAt - clipSide, clipAt + clipSide);
+};
+$("clip-from").oninput = $("clip-to").oninput = () => {
+  clipSide = 0;
+  paintClip();
+};
+$("clip-from").onchange = $("clip-to").onchange = () => {
+  // tidy what was typed (90 -> 0:01:30) once it's a valid time
+  const { from, to } = clipRange();
+  if (from >= 0 && to > from) setClipRange(from, to);
+};
+$("clip-from-now").onclick = () => {
+  const { to } = clipRange();
+  const t = $("pl-video").currentTime;
+  clipSide = 0;
+  setClipRange(t, to > t ? to : t + 30);
+};
+$("clip-to-now").onclick = () => {
+  const { from } = clipRange();
+  const t = $("pl-video").currentTime;
+  clipSide = 0;
+  setClipRange(from < t ? from : Math.max(0, t - 30), t);
+};
+$("clip-cancel").onclick = () => (clipBusy ? clipBusy.abort() : $("dlg-clip").close());
+$("dlg-clip").addEventListener("cancel", (e) => {
+  e.preventDefault();
+  $("clip-cancel").click();
+});
+$("clip-from").onkeydown = $("clip-to").onkeydown = (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    $("clip-go").click();
+  }
+};
+
+$("clip-go").onclick = async () => {
+  const rec = playerRec;
+  const src = playerBlob;
+  let { from, to } = clipRange();
+  to = Math.min(to, clipDur() || to);
+  if (!rec || !src || !(to > from) || clipBusy) return;
+  const fast = extOf(rec) === "mp4";
+  let ext = fast ? "mp4" : MeetClip.againExt();
+  const stampOf = (s) => fmtDuration(s * 1000).replace(/:/g, "-");
+  const name = `${rec.name.replace(/[\\/:*?"<>|]+/g, " ").trim() || "Meeting"} clip ${stampOf(from)} to ${stampOf(to)}`;
+  // Ask where to save first: Chrome only shows the Save dialog right after the click
+  let handle = null;
+  if (window.showSaveFilePicker) {
+    try {
+      handle = await window.showSaveFilePicker({
+        id: "meetclip",
+        startIn: "downloads",
+        suggestedName: `${name}.${ext}`,
+        types: [{ description: "Video", accept: { [`video/${ext}`]: [`.${ext}`] } }],
+      });
+    } catch (e) {
+      if (e.name === "AbortError") return;
+      handle = null; // no Save dialog here: download it instead
+    }
+  }
+  clipBusy = new AbortController();
+  clipState(true, 0);
+  const onProgress = (p) => ($("clip-fill").style.width = Math.round(p * 100) + "%");
+  try {
+    let out = fast ? await MeetClip.cutMp4(src, from, to, { open: handle ? () => handle.createWritable() : null, onProgress }) : null;
+    if (!out) {
+      // not a file that can be cut directly: play that part again and record it
+      $("clip-note").textContent = "Recording the clip again: this takes as long as the clip.";
+      out = await MeetClip.recordAgain(src, from, to, { onProgress, signal: clipBusy.signal });
+      if (handle) {
+        const w = await handle.createWritable();
+        await w.write(out.blob);
+        await w.close();
+      }
+      ext = out.blob.type === "video/mp4" ? "mp4" : "webm";
+    }
+    if (!handle) {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(out.blob);
+      a.download = `${name}.${ext}`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+    }
+    $("dlg-clip").close();
+    toast(handle ? `Clip saved: ${handle.name}` : "Clip saved to Downloads");
+  } catch (e) {
+    if (e.name === "AbortError") $("dlg-clip").close();
+    else $("clip-msg").textContent = "Couldn't export the clip: " + (e.message || e);
+  } finally {
+    clipBusy = null;
+    if ($("dlg-clip").open) clipState(false);
+  }
+};
 
 // ---------- transcript (speech-to-text on this PC) ----------
 // Transcripts are made in the background (transcriber.js in the recorder's offscreen page, queued by

@@ -19,6 +19,13 @@ the extension, and uploads to Google Drive on demand. No backend required.
 Icon → **My recordings & Drive upload**. Per recording: **Open** (default video player),
 **Show in folder**, **Upload to Drive**, **Delete**. Uploaded items get an "On Drive" badge and a link.
 
+## Export a clip
+In the player, the scissors next to a bookmark export a short clip around it (30 s each side by default;
+15 s, 1 min or 2 min with one click, or type any From/To). **Clip** above the bookmarks does the same
+around the current position. Chrome asks where to save it. MP4 recordings are cut in about a second
+without re-encoding (the clip starts on the keyframe at or up to 2 s before From); older WebM recordings
+are played in the background and recorded again, which takes as long as the clip.
+
 ## Google Drive setup (one time)
 1. Google Cloud Console → new project → enable **Google Drive API**.
 2. OAuth consent screen → add yourself as a test user.

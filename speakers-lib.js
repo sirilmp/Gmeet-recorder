@@ -4,9 +4,34 @@
 // A line's name is kept in the line itself (sp), so the .txt / .vtt / Drive copies carry it, and a
 // name changed by hand in the player stays.
 
+// Meet's icon names ("keep_outline", "frame_person"): an early version read these as people's names
+const UNKNOWN = "\u0000?";
+const notAName = (n) => typeof n === "string" && /^[a-z0-9]+(_[a-z0-9]+)+$/.test(n);
+
+// The same transcript without icon names in it, named again from the recording's (cleaned) log.
+// null when there was nothing to clean.
+function cleanSpeakers(segs, speakers) {
+  if (!Array.isArray(segs) || !segs.some((x) => notAName(x.sp))) return null;
+  const bare = segs.map((x) => {
+    if (!notAName(x.sp)) return x;
+    const { sp, ...rest } = x;
+    return rest;
+  });
+  return labelSpeakers(bare, speakers);
+}
+
 // segs: [{s, e, t}] in seconds. Lines that already have a name (sp) keep it.
 function labelSpeakers(segs, speakers) {
   if (!Array.isArray(segs) || !Array.isArray(speakers) || !speakers.length) return segs;
+  // icon names in a log from an early version: someone was talking, but who isn't known
+  if (speakers.some((x) => notAName(x[1]))) {
+    const out = labelSpeakers(segs, speakers.map(([at, n]) => [at, notAName(n) ? UNKNOWN : n]));
+    return out.map((x) => {
+      if (x.sp !== UNKNOWN) return x;
+      const { sp, ...rest } = x;
+      return rest;
+    });
+  }
   return segs.map((x) => {
     if (x.sp !== undefined) return x;
     const sp = speakerAt(speakers, x.s * 1000, Math.max(x.e, x.s + 1) * 1000);

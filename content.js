@@ -103,23 +103,34 @@ const toBackground = (msg) => {
 };
 
 // The name label is marked notranslate (Google's convention for people's names); the tile's buttons
-// ("More options for Sweta") are the fallback
+// ("More options for Sweta") are the fallback. Meet's icons are text too ("keep_outline",
+// "frame_person" drawn by an icon font) and are also marked notranslate, so those are skipped.
+const iconName = (t) => /^[a-z0-9]+(_[a-z0-9]+)+$/.test(t);
+function isIcon(el, t) {
+  if (iconName(t)) return true;
+  for (let e = el; e && e.nodeType === 1; e = e.parentElement) {
+    if (e.matches("[data-participant-id]")) break;
+    if (e.matches("button, [role=button], [aria-hidden=true], svg") || /icon|symbol/i.test(e.getAttribute("class") || "")) return true;
+  }
+  return false;
+}
+
 function tileName(tile) {
   for (const n of tile.querySelectorAll(".notranslate")) {
+    if (n.childElementCount) continue; // the label itself, not a box around icons and text
     const t = n.textContent.trim();
-    if (t && t.length <= 60) return selfName(t);
+    if (t && t.length <= 60 && !isIcon(n, t)) return selfName(t);
   }
   for (const b of tile.querySelectorAll("[aria-label]")) {
     const m = /(?:options for|^Pin) (.+?)(?: to your main screen)?$/i.exec(b.getAttribute("aria-label"));
     if (m) return selfName(m[1].trim());
   }
-  // last resort: the first short line of text in the tile that isn't an icon name ("mic_off", "more_vert")
+  // last resort: the first short line of text in the tile that isn't an icon
   const walk = document.createTreeWalker(tile, NodeFilter.SHOW_TEXT);
   for (let n = walk.nextNode(); n; n = walk.nextNode()) {
     const t = n.nodeValue.trim();
     if (t.length < 2 || t.length > 60 || /^[a-z0-9_]+$/.test(t)) continue;
-    const p = n.parentElement;
-    if (p && (p.closest("button, [role=button], [aria-hidden=true]") || /icon/i.test(p.className))) continue;
+    if (n.parentElement && isIcon(n.parentElement, t)) continue;
     return selfName(t);
   }
   return null;

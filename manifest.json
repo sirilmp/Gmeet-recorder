@@ -9,6 +9,7 @@
     "offscreen",
     "identity",
     "storage",
+    "alarms",
     "unlimitedStorage",
     "activeTab",
     "downloads",

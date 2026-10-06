@@ -9,7 +9,8 @@ function setMsg(text, isErr = false) {
 function fmt(ms) {
   const s = Math.floor(ms / 1000);
   const p = (n) => String(n).padStart(2, "0");
-  return `${p(Math.floor(s / 3600))}:${p(Math.floor((s % 3600) / 60))}:${p(s % 60)}`;
+  // Same format as the bar on the Meet page: 4:05, then 1:04:05 past an hour
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${p(Math.floor((s % 3600) / 60))}:${p(s % 60)}` : `${Math.floor(s / 60)}:${p(s % 60)}`;
 }
 
 // Only the Meet tab is supported (it also picks up my screen share when I present)
@@ -243,8 +244,8 @@ $("start").onclick = async () => {
 $("mark").onclick = async () => {
   const res = await chrome.runtime.sendMessage({ target: "background", type: "bookmark" });
   const s = $("mark").querySelector("span");
-  s.textContent = res && res.ok ? "Bookmarked ✓" : "Not recording";
-  setTimeout(() => (s.textContent = "Add bookmark"), 1500);
+  s.textContent = res && res.ok ? "Added" : "Not recording";
+  setTimeout(() => (s.textContent = "Bookmark"), 1500);
 };
 
 $("stop").onclick = async () => {

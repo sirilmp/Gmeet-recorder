@@ -7,56 +7,67 @@
   <link rel="icon" href="icons/icon32.png">
   <link rel="stylesheet" href="shared.css">
   <style>
-    .top { background: linear-gradient(135deg, var(--primary), var(--primary-2)); color: #fff; padding: 26px 20px 60px; }
-    .wrap { max-width: 720px; margin: 0 auto; }
-    .top .wrap { display: flex; align-items: center; gap: 14px; }
-    .top img { width: 44px; height: 44px; border-radius: 12px; }
-    .back { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; color: #fff; background: rgba(255,255,255,.18); text-decoration: none; flex: none; }
-    .back:hover { background: rgba(255,255,255,.3); }
-    h1 { margin: 0; font-size: 22px; } .top p { margin: 2px 0 0; opacity: .85; }
-    main { margin-top: -36px; padding: 0 20px 40px; }
-    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 4px 18px; margin-bottom: 14px; }
-    .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 2px; }
-    .opt { display: flex; align-items: center; gap: 14px; padding: 14px 0; border-top: 1px solid var(--border); }
-    .card h2 + .opt { border-top: 0; }
-    .opt .tx { flex: 1; } .opt .t { font-weight: 600; } .opt .d { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
-    select { padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; }
-    .sw { position: relative; width: 42px; height: 24px; flex: none; }
+    .wrap { max-width: 680px; margin: 0 auto; padding: 0 24px; }
+    .back { width: 34px; height: 34px; margin-left: -8px; border-radius: var(--radius-sm); display: grid; place-items: center; color: var(--muted); text-decoration: none; flex: none; }
+    .back:hover { background: var(--surface-2); color: var(--text); }
+    .back:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus); }
+    .back svg { width: 17px; height: 17px; }
+    main { padding: 32px 0 56px; }
+    .pagehead { display: flex; align-items: baseline; gap: 12px; margin-bottom: 24px; }
+    .pagehead h1 { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: -.02em; }
+    .pagehead p { margin: 0; color: var(--muted); font-size: 13px; }
+    #msg { margin-left: auto; color: var(--success); font-size: 12.5px; font-weight: 550; }
+    section { margin-bottom: 26px; }
+    section > h2 { font-size: 13px; font-weight: 600; color: var(--text); margin: 0 2px 8px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 0 16px; }
+    .opt { display: flex; align-items: center; gap: 20px; padding: 14px 0; }
+    .opt + .opt { border-top: 1px solid var(--border); }
+    .opt .tx { flex: 1; } .opt .t { font-weight: 550; font-size: 13.5px; } .opt .d { color: var(--muted); font-size: 12.5px; margin-top: 2px; max-width: 60ch; }
+    .opt .d a { color: var(--text); font-weight: 550; }
+    select { height: 34px; padding: 0 30px 0 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; max-width: 260px; }
+    select:focus-visible { outline: none; border-color: var(--text); box-shadow: 0 0 0 3px var(--focus); }
+    .sw { position: relative; width: 34px; height: 20px; flex: none; }
     .sw input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
-    .sw i { position: absolute; inset: 0; background: var(--border); border-radius: 24px; transition: .15s; }
-    .sw i::after { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; border-radius: 50%; background: #fff; transition: .15s; }
-    .sw input:checked + i { background: var(--primary); } .sw input:checked + i::after { left: 21px; }
-    .big { font-size: 20px; font-weight: 700; }
-    #msg { color: var(--success); font-size: 12.5px; min-height: 18px; margin: 4px 2px; }
+    .sw i { position: absolute; inset: 0; background: var(--border-strong); border-radius: 20px; transition: background .15s; }
+    .sw i::after { content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+    .sw input:checked + i { background: var(--primary); } .sw input:checked + i::after { transform: translateX(14px); background: var(--on-primary); }
+    .sw input:focus-visible + i { box-shadow: 0 0 0 3px var(--focus); }
+    .big { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -.02em; white-space: nowrap; }
   </style>
 </head>
 <body>
-  <div class="top"><div class="wrap">
-    <a class="back" href="library.html" title="Back to recordings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></a>
-    <img src="icons/icon128.png" alt="">
-    <div><h1>Settings</h1><p>Changes save automatically</p></div>
-  </div></div>
+  <header class="appbar"><div class="wrap">
+    <a class="back" href="library.html" title="Back to recordings" aria-label="Back to recordings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></a>
+    <a class="brand" href="library.html"><img src="icons/icon128.png" alt="">Meet Recorder <span class="sep">/</span> <span class="page">Settings</span></a>
+  </div></header>
   <main><div class="wrap">
-    <div class="card">
+    <div class="pagehead"><h1>Settings</h1><p>Changes save automatically</p><div id="msg"></div></div>
+
+    <section>
       <h2>Meet page</h2>
+      <div class="card">
       <div class="opt">
         <div class="tx"><div class="t">Floating control bar</div>
           <div class="d">Record, Stop and Bookmark buttons on the Meet tab. Drag it anywhere.</div></div>
         <label class="sw"><input type="checkbox" id="showDock"><i></i></label>
       </div>
-    </div>
+      </div>
+    </section>
 
-    <div class="card">
+    <section>
       <h2>Google Drive</h2>
+      <div class="card">
       <div class="opt">
         <div class="tx"><div class="t">Upload after every recording</div>
           <div class="d" id="driveState">Uses your connected Drive. Goes to Meet Recordings → date folder.</div></div>
         <label class="sw"><input type="checkbox" id="autoUpload"><i></i></label>
       </div>
-    </div>
+      </div>
+    </section>
 
-    <div class="card">
+    <section>
       <h2>Recording</h2>
+      <div class="card">
       <div class="opt">
         <div class="tx"><div class="t">When I join a meeting</div>
           <div class="d">Chrome only lets an extension start recording after a click or keypress from you, so this can't be fully automatic. “Remind me” shows a prompt as soon as you join, and one keypress starts it. Recording stops by itself when you leave.</div></div>
@@ -73,10 +84,12 @@
           <option value="max">4K · 2160p</option>
         </select>
       </div>
-    </div>
+      </div>
+    </section>
 
-    <div class="card">
+    <section>
       <h2>Transcript</h2>
+      <div class="card">
       <div class="opt">
         <div class="tx"><div class="t">Speech model</div>
           <div class="d">Runs on this PC, no audio is sent anywhere. The model downloads once, then works offline. Bigger = more accurate but slower.</div></div>
@@ -97,10 +110,12 @@
           <option value="chinese">Chinese</option><option value="japanese">Japanese</option><option value="korean">Korean</option>
         </select>
       </div>
-    </div>
+      </div>
+    </section>
 
-    <div class="card">
+    <section>
       <h2>Storage</h2>
+      <div class="card">
       <div class="opt">
         <div class="tx"><div class="t">Recordings on this PC</div><div class="d" id="usage">Calculating…</div></div>
         <div class="big" id="total"></div>
@@ -120,8 +135,8 @@
       </div>
       <div class="opt"><div class="tx"><div class="t">Clean up now</div><div class="d" id="cleanMsg">Applies the two rules above.</div></div>
         <button class="btn" id="clean">Clean up</button></div>
-    </div>
-    <div id="msg"></div>
+      </div>
+    </section>
   </div></main>
   <script src="settings-lib.js"></script>
   <script src="settings.js"></script>

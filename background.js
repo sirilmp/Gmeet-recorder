@@ -313,7 +313,7 @@ async function beginSave({ durationMs, size, ext }) {
   const { marks = [], spk = [] } = await chrome.storage.session.get(["marks", "spk"]);
   const filename = `${meta.name} ${stamp(meta.startedAt)}.${ext}`;
   const saving = { name: meta.name, mode: meta.mode || "tab", startedAt: meta.startedAt, durationMs, size, filename, ext, bookmarks: marks };
-  if (spk.some((x) => x[1])) saving.speakers = spk;
+  if (spk.length) saving.speakers = spk; // even with no names: says the Meet page was watching
   await chrome.storage.local.set({ saving });
   await chrome.storage.local.remove("pending");
   const { settings, driveConn } = await chrome.storage.local.get(["settings", "driveConn"]);

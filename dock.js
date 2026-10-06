@@ -48,12 +48,27 @@
       .ask .row button:not(.rec) { color: #a3a39e; } .ask .row button:not(.rec):hover { color: #fff; }
       .ask .row button.rec { background: #ececea; color: #1a1a19; } .ask .row button.rec:hover { background: #fff; }
       [hidden] { display: none !important; }
-      /* Popped out into its own always-on-top window: the bar fills it, the window's own frame moves and closes it */
-      body.pip { margin: 0; height: 100vh; background: #1c1c1b; display: flex; flex-direction: column; align-items: center;
-        justify-content: center; gap: 6px; overflow: hidden; }
-      .pip .bar { background: none; box-shadow: none; backdrop-filter: none; }
+      .lbl, #pip .in { display: none; }
+      /* Popped out into its own always-on-top window: a small control panel, timer on the left, actions on the
+         right; the window's own frame moves and closes it. Scaled down to fit when the window is narrow. */
+      html.pip, html.pip body { margin: 0; height: 100%; background: #1c1c1b; color-scheme: dark; overflow: hidden; }
+      html.pip body { display: flex; align-items: center; }
+      .pip .bar { flex: 1; min-width: 0; gap: 6px; padding: 0 12px; border-radius: 0; background: none; box-shadow: none; backdrop-filter: none; }
+      .pip .bar > * { flex: none; }
       .pip .grip, .pip .div, .pip #hide { display: none; }
-      .pip .note { position: static; margin: 0 8px; box-shadow: none; background: rgba(255,255,255,.06); }
+      .pip .live { margin-right: auto; padding: 0; gap: 9px; }
+      .pip .dot { width: 9px; height: 9px; }
+      .pip .time { font-size: 17px; font-weight: 500; letter-spacing: -.01em; min-width: 0; }
+      .pip #start { margin-right: auto; height: 32px; padding: 0 14px; }
+      .pip button { height: 32px; }
+      .pip #mark, .pip #stop { width: auto; padding: 0 12px 0 10px; background: rgba(255,255,255,.07); color: #ececea; }
+      .pip #mark:hover, .pip #stop:hover { background: rgba(255,255,255,.13); }
+      .pip #stop svg { color: #ec5d5e; }
+      .pip .lbl { display: inline; }
+      .pip #pip { width: 28px; margin-left: 2px; }
+      .pip #pip .out { display: none; } .pip #pip .in { display: block; }
+      .pip .note { top: 50%; left: 8px; right: 8px; max-width: none; margin: 0; transform: translateY(-50%); padding: 7px 10px;
+        background: #2a2a28; box-shadow: 0 0 0 1px rgba(255,255,255,.08); text-align: center; }
 `;
   root.innerHTML = `
     <style>${CSS}</style>
@@ -61,9 +76,9 @@
       <div class="grip" id="grip" title="Drag to move"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></svg></div>
       <button id="start" class="rec" title="Start recording this meeting"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>Record</button>
       <span id="live" class="live" hidden><span class="dot"></span><span class="time" id="time">0:00</span></span>
-      <button id="mark" class="icon" title="Add a bookmark here" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button>
+      <button id="mark" class="icon" title="Add a bookmark here" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg><span class="lbl">Bookmark</span></button>
       <button id="stop" title="Stop and save" hidden><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Stop</button>
-      <button id="pip" class="icon" title="Pop out: keep this bar on top of every tab and window" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="6" height="5" rx="1" fill="currentColor"/></svg></button>
+      <button id="pip" class="icon" title="Pop out: keep this bar on top of every tab and window" hidden><svg class="out" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="6" height="5" rx="1" fill="currentColor"/></svg><svg class="in" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 5H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4"/><path d="M20 4l-7 7M13 6.5V11h4.5"/></svg></button>
       <span class="div"></span><button id="hide" class="icon" title="Close for this meeting (turn it off for good in Settings)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
     <div class="note" id="note" hidden></div>
@@ -82,7 +97,7 @@
       .then((f) => {
         fonts.push(f);
         document.fonts.add(f);
-        if (pipWin) pipWin.document.fonts.add(f);
+        if (pipWin) pipWin.document.fonts.add(f), fitPip();
       })
       .catch(() => {});
   // Looked up once: the bar and its note move into the pop-out window and back, out of this shadow root
@@ -158,6 +173,7 @@
       timer = setInterval(tick, 1000);
     }
     place();
+    fitPip();
   }
 
   // ---- sharing this tab with the recorder ----
@@ -258,7 +274,7 @@
     if (!canPip || pipWin) return pipWin;
     let w;
     try {
-      w = await documentPictureInPicture.requestWindow({ width: 300, height: 96 });
+      w = await documentPictureInPicture.requestWindow({ width: 360, height: 64 });
     } catch (e) {
       if (!auto) note("Couldn't pop out the bar: click the pop-out button again.", false);
       return null;
@@ -270,11 +286,13 @@
     const style = doc.createElement("style");
     style.textContent = CSS;
     doc.head.append(style);
-    doc.body.className = "pip";
+    doc.documentElement.className = "pip";
     for (const f of fonts) doc.fonts.add(f);
     doc.body.append($("bar"), $("note"));
     $("pip").title = "Put this bar back on the Meet page";
     w.addEventListener("keydown", markKey, true);
+    w.addEventListener("resize", fitPip);
+    fitPip();
     w.addEventListener("pagehide", () => {
       if (pipWin !== w) return;
       pipWin = null;
@@ -285,6 +303,14 @@
     return w;
   }
   const closePip = () => pipWin && pipWin.close();
+  // Shrink the controls to fit a narrow window (or a zoomed-in Meet, whose zoom the window takes on)
+  function fitPip() {
+    const bar = $("bar");
+    bar.style.zoom = "";
+    if (!pipWin) return;
+    const z = Math.min(1, (pipWin.innerWidth - 4) / bar.scrollWidth, (pipWin.innerHeight - 4) / bar.scrollHeight);
+    if (z < 1) bar.style.zoom = String(Math.max(0.5, z));
+  }
   $("pip").hidden = !canPip;
   $("pip").onclick = () => (pipWin ? closePip() : openPip(false));
 

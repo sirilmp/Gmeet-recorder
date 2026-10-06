@@ -18,6 +18,11 @@ const ICON = {
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>',
 };
 
+// Bookmarks used to be saved as plain ms numbers; ones with notes are { ms, note }.
+function marksOf(rec) {
+  return (rec.bookmarks || []).map((b) => (typeof b === "number" ? { ms: b, note: "" } : { ms: b.ms, note: b.note || "" }));
+}
+
 function fmtDuration(ms) {
   const s = Math.round(ms / 1000);
   const p = (n) => String(n).padStart(2, "0");
@@ -496,9 +501,9 @@ async function buildCard(rec) {
   );
   if (rec.bookmarks && rec.bookmarks.length) {
     const marks = el("div", "marks");
-    for (const ms of rec.bookmarks) {
-      const m = el("button", "mark", `${ICON.bookmark}${fmtDuration(ms)}`);
-      m.title = "Play from here";
+    for (const { ms, note } of marksOf(rec)) {
+      const m = el("button", "mark", `${ICON.bookmark}${fmtDuration(ms)}${note ? `<span class="mn">${esc(note)}</span>` : ""}`);
+      m.title = note ? `${note}\nPlay from here` : "Play from here";
       m.onclick = () => playRecording(rec, item, ms / 1000);
       marks.append(m);
     }
@@ -724,6 +729,11 @@ const PI = {
   pip: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="5" rx="1" fill="currentColor"/>'),
   full: svg('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
   exit: svg('<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>'),
+  mark: svg('<path d="M6 3.5h12v17l-6-4-6 4z"/>'),
+  marked: svg('<path d="M6 3.5h12v17l-6-4-6 4z"/>', true),
+  close: svg('<path d="M6 6l12 12M18 6L6 18"/>'),
+  max: svg('<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>'),
+  min: svg('<path d="M20 10h-6V4M4 14h6v6M14 10l7-7M10 14l-7 7"/>'),
 };
 const RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
@@ -731,6 +741,8 @@ function closePlayer() {
   const v = $("pl-video");
   v.pause();
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  $("dlg-player").classList.remove("max");
+  flushMarks();
   v.removeAttribute("src");
   v.load();
   if (playerUrl) URL.revokeObjectURL(playerUrl);
@@ -741,15 +753,112 @@ function closePlayer() {
   $("pl-cap").hidden = true;
   if ($("dlg-player").open) $("dlg-player").close();
 }
-$("pl-close").onclick = () => {
+function askClosePlayer() {
   if (trWorker && !confirm("The transcript is still being made. Stop it and close?")) return;
   closePlayer();
-};
+}
+$("pl-close").onclick = askClosePlayer;
 $("dlg-player").addEventListener("cancel", (e) => {
   e.preventDefault();
   if (document.fullscreenElement) return;
-  closePlayer();
+  if ($("dlg-player").classList.contains("max")) return $("pl-max").click();
+  askClosePlayer();
 });
+
+// ---------- bookmarks inside the player (with notes) ----------
+let marksDirty = false;
+let marksTimer = 0;
+async function saveMarks(marks) {
+  const rec = playerRec;
+  if (!rec) return;
+  marks.sort((a, b) => a.ms - b.ms);
+  rec.bookmarks = marks.map(({ ms, note }) => (note.trim() ? { ms, note: note.trim() } : { ms }));
+  marksDirty = true;
+  await updateRecord(rec.downloadId, { bookmarks: rec.bookmarks });
+}
+function saveMarksSoon(marks) {
+  clearTimeout(marksTimer);
+  marksTimer = setTimeout(() => saveMarks(marks), 400);
+}
+function flushMarks() {
+  if (marksTimer) {
+    clearTimeout(marksTimer);
+    marksTimer = 0;
+    const marks = [...$("bm-list").children].map((row) => ({ ms: Number(row.dataset.ms), note: row.querySelector(".bm-note").value }));
+    saveMarks(marks).then(() => render());
+  } else if (marksDirty) render();
+  marksDirty = false;
+}
+
+function renderMarks() {
+  const list = $("bm-list");
+  list.replaceChildren();
+  const marks = playerRec ? marksOf(playerRec) : [];
+  $("bm-empty").hidden = marks.length > 0;
+  $("bm-count").textContent = marks.length ? String(marks.length) : "";
+  for (const m of marks) {
+    const row = el("div", "bm-row");
+    row.dataset.ms = m.ms;
+    const t = el("button", "bm-time", `${ICON.bookmark}${fmtDuration(m.ms)}`);
+    t.type = "button";
+    t.title = "Play from here";
+    t.onclick = () => {
+      const v = $("pl-video");
+      v.currentTime = m.ms / 1000;
+      v.play().catch(() => {});
+    };
+    const note = el("input", "bm-note");
+    note.type = "text";
+    note.maxLength = 500;
+    note.placeholder = "Add a note…";
+    note.setAttribute("aria-label", `Note for bookmark at ${fmtDuration(m.ms)}`);
+    note.value = m.note;
+    note.oninput = () => {
+      m.note = note.value;
+      saveMarksSoon(marks);
+    };
+    note.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === "Escape") {
+        e.preventDefault();
+        note.blur();
+      }
+    };
+    const del = btn(PI.close, "", "btn-ghost bm-del", () => {
+      clearTimeout(marksTimer);
+      marksTimer = 0;
+      marks.splice(marks.indexOf(m), 1);
+      saveMarks(marks);
+      renderMarks();
+    });
+    del.type = "button";
+    del.title = "Remove bookmark";
+    row.append(t, note, del);
+    list.append(row);
+  }
+  paintPlayerTicks();
+}
+
+function addMark() {
+  if (!playerRec) return;
+  const v = $("pl-video");
+  const ms = Math.round(v.currentTime * 1000);
+  const marks = marksOf(playerRec);
+  let m = marks.find((x) => Math.abs(x.ms - ms) < 1000);
+  if (!m) {
+    clearTimeout(marksTimer);
+    marksTimer = 0;
+    m = { ms, note: "" };
+    marks.push(m);
+    saveMarks(marks);
+  }
+  renderMarks();
+  // Type the note straight away (not while the video alone is full screen: the list is hidden then)
+  if (document.fullscreenElement !== $("pl-stage")) {
+    const input = $("bm-list").querySelector(`[data-ms="${m.ms}"] .bm-note`);
+    if (input) input.focus();
+  }
+}
+$("bm-add").onclick = addMark;
 
 let paintPlayerTicks = () => {};
 (function wirePlayer() {
@@ -778,16 +887,17 @@ let paintPlayerTicks = () => {};
     $("pl-fill").style.width = p + "%";
     $("pl-knob").style.left = p + "%";
     $("pl-time").textContent = `${clock(v.currentTime)} / ${clock(d)}`;
+    $("bm-at").textContent = clock(v.currentTime);
     if (v.buffered.length && d) $("pl-buf").style.width = Math.min(100, (v.buffered.end(v.buffered.length - 1) / d) * 100) + "%";
   };
   paintPlayerTicks = () => {
     const d = dur();
     $("pl-ticks").innerHTML = "";
     if (!d || !playerRec) return;
-    for (const ms of playerRec.bookmarks || []) {
+    for (const { ms, note } of marksOf(playerRec)) {
       const i = document.createElement("i");
       i.style.left = Math.min(100, (ms / 1000 / d) * 100) + "%";
-      i.title = "Bookmark " + fmtDuration(ms);
+      i.title = "Bookmark " + fmtDuration(ms) + (note ? ": " + note : "");
       $("pl-ticks").append(i);
     }
   };
@@ -797,6 +907,10 @@ let paintPlayerTicks = () => {};
   $("pl-mute").innerHTML = PI.vol;
   $("pl-pip").innerHTML = PI.pip;
   $("pl-full").innerHTML = PI.full;
+  $("pl-mark").innerHTML = PI.mark;
+  $("pl-close").innerHTML = PI.close;
+  $("pl-max").innerHTML = PI.max;
+  $("bm-add").innerHTML = `${ICON.bookmark}Bookmark <span id="bm-at">0:00:00</span>`;
   $("pl-pip").hidden = !document.pictureInPictureEnabled;
 
   v.addEventListener("play", () => ($("pl-play").innerHTML = PI.pause));
@@ -833,8 +947,30 @@ let paintPlayerTicks = () => {};
   };
   v.addEventListener("ratechange", () => ($("pl-rate").textContent = v.playbackRate + "×"));
   $("pl-pip").onclick = () => (document.pictureInPictureElement ? document.exitPictureInPicture() : v.requestPictureInPicture()).catch(() => {});
-  $("pl-full").onclick = () => (document.fullscreenElement ? document.exitFullscreen() : stage.requestFullscreen()).catch(() => {});
-  document.addEventListener("fullscreenchange", () => ($("pl-full").innerHTML = document.fullscreenElement ? PI.exit : PI.full));
+  // F / the button in the controls: the video alone, full screen
+  $("pl-full").onclick = () => (document.fullscreenElement === stage ? document.exitFullscreen() : stage.requestFullscreen()).catch(() => {});
+  // The header button: the whole player (video, bookmarks and transcript) fills the screen
+  const panel = document.querySelector("#dlg-player .pl");
+  const dlg = $("dlg-player");
+  $("pl-max").onclick = () => {
+    if (document.fullscreenElement === panel) return document.exitFullscreen().catch(() => {});
+    if (dlg.classList.contains("max")) return dlg.classList.remove("max"), paintMax();
+    panel.requestFullscreen().catch(() => {
+      // no Fullscreen API (or it was refused): fill the browser window instead
+      dlg.classList.add("max");
+      paintMax();
+    });
+  };
+  const paintMax = () => {
+    const on = document.fullscreenElement === panel || dlg.classList.contains("max");
+    $("pl-max").innerHTML = on ? PI.min : PI.max;
+    $("pl-max").title = on ? "Exit full screen" : "Full screen with transcript";
+  };
+  document.addEventListener("fullscreenchange", () => {
+    $("pl-full").innerHTML = document.fullscreenElement === stage ? PI.exit : PI.full;
+    paintMax();
+  });
+  $("pl-mark").onclick = addMark;
 
   // seek bar: click or drag
   const seek = $("pl-seek");
@@ -875,6 +1011,7 @@ let paintPlayerTicks = () => {};
       if (e.target.tagName === "BUTTON") return;
       toggle();
     } else if (k === "m") v.muted = !v.muted;
+    else if (k === "b") addMark();
     else if (k === "f") $("pl-full").click();
     else if (k === "c") $("pl-cc").click();
     else if (k === "arrowup") v.volume = Math.min(1, v.volume + 0.1);
@@ -909,6 +1046,7 @@ function renderTranscript(segs) {
   $("pl-cc").hidden = !has;
   $("pl-cc").classList.toggle("on", has && trCC);
   for (const k of ["tr-copy", "tr-vtt", "tr-del"]) $(k).hidden = !has || !!trWorker;
+  $("tr-empty").hidden = has || !!trWorker;
   for (const sg of trSegs) {
     const row = el("div", "tr-line");
     row.dataset.s = sg.s;
@@ -980,6 +1118,7 @@ async function generateTranscript() {
   $("tr-gen").textContent = "Cancel";
   $("tr-bar").hidden = false;
   $("tr-fill").style.width = "0%";
+  $("tr-empty").hidden = true;
   for (const k of ["tr-copy", "tr-vtt", "tr-del"]) $(k).hidden = true;
   try {
     state("Reading the audio…");
@@ -1089,21 +1228,9 @@ async function playRecording(rec, item, startAt) {
   const v = $("pl-video");
   playerRec = rec;
   v.removeAttribute("src");
-  // bookmark chips jump inside the open player
   stopTranscribe();
   loadTranscript(rec);
-  const box = $("pl-marks");
-  box.replaceChildren();
-  box.hidden = !(rec.bookmarks && rec.bookmarks.length);
-  for (const ms of rec.bookmarks || []) {
-    const b = el("button", "", `${ICON.bookmark}${fmtDuration(ms)}`);
-    b.type = "button";
-    b.onclick = () => {
-      v.currentTime = ms / 1000;
-      v.play().catch(() => {});
-    };
-    box.append(b);
-  }
+  renderMarks();
   try {
     // The copy kept inside the extension if there is one, else the file in Downloads (asks once for access)
     const blob = (await keptFile(rec)) || (item ? await readLocalFile(rec, item) : null);

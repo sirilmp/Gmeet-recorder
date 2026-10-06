@@ -581,8 +581,9 @@ function cleanup() {
   chunks = [];
 }
 
-// Upload the finished recording to the user's Drive (through their saved script): Meet Recordings / <date> / file
-async function autoUpload(blob, filename, startedAtMs) {
+// Upload the finished recording to the user's Drive (through their saved script):
+// Meet Recordings / <date> / <recording> / video + info file (bookmarks; the transcript comes later)
+async function autoUpload(blob, filename, startedAtMs, rec) {
   const bg = (msg) => chrome.runtime.sendMessage({ target: "background", ...msg }).catch(() => null);
   const status = (patch) => bg({ type: "upload-status", patch });
   try {
@@ -593,11 +594,20 @@ async function autoUpload(blob, filename, startedAtMs) {
     const p = (n) => String(n).padStart(2, "0");
     const dateName = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
     const oldUrl = conn.url;
-    const out = await driveUploadViaScript(conn, blob, filename.split("/").pop(), dateName, (pct) =>
+    const driveName = filename.split("/").pop();
+    const out = await driveUploadPackage(conn, blob, rec || { name: driveName, startedAt: startedAtMs }, driveName, dateName, null, (pct) =>
       status({ state: "uploading", pct })
     );
     if (conn.url !== oldUrl) await chrome.storage.local.set({ driveConn: conn });
-    await bg({ type: "uploaded", startedAt: startedAtMs, fileUrl: out.fileUrl, folderUrl: out.folderUrl });
+    await bg({
+      type: "uploaded",
+      startedAt: startedAtMs,
+      fileUrl: out.fileUrl,
+      folderUrl: out.folderUrl,
+      folderId: out.folderId,
+      packaged: out.packaged,
+      driveName,
+    });
     status({ state: "done", shared: true, ...out });
   } catch (e) {
     console.warn("auto-upload failed", e);
@@ -680,7 +690,7 @@ async function finish() {
     a.remove();
     const root = await navigator.storage.getDirectory();
     if (kept && stored) await root.removeEntry(stored).catch(() => {});
-    const uploadDone = res && res.autoUpload ? autoUpload(blob, res.filename, res.startedAt) : Promise.resolve();
+    const uploadDone = res && res.autoUpload ? autoUpload(blob, res.filename, res.startedAt, res.rec) : Promise.resolve();
     setTimeout(async () => {
       await uploadDone; // keep the file until the Drive upload has read it
       URL.revokeObjectURL(url);

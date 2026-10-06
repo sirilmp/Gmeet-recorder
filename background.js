@@ -90,11 +90,11 @@ function getToken(interactive) {
   });
 }
 
-async function markUploaded({ startedAt, fileUrl, folderUrl }) {
+async function markUploaded({ startedAt, fileUrl, folderUrl, folderId, packaged, driveName }) {
   const { recordings = [] } = await chrome.storage.local.get("recordings");
   const r = recordings.find((x) => x.startedAt === startedAt);
   if (r) {
-    Object.assign(r, { uploaded: true, driveUrl: fileUrl, folderUrl });
+    Object.assign(r, { uploaded: true, driveUrl: fileUrl, folderUrl, driveFolderId: folderId || null, packaged: !!packaged, driveName });
     await chrome.storage.local.set({ recordings });
   }
 }
@@ -280,12 +280,16 @@ async function beginSave({ durationMs, size, ext }) {
   const meta = pending || { name: "Meeting", startedAt: Date.now() - durationMs, mode: "tab" };
   const { marks = [] } = await chrome.storage.session.get("marks");
   const filename = `${meta.name} ${stamp(meta.startedAt)}.${ext}`;
-  await chrome.storage.local.set({
-    saving: { name: meta.name, mode: meta.mode || "tab", startedAt: meta.startedAt, durationMs, size, filename, ext, bookmarks: marks },
-  });
+  const saving = { name: meta.name, mode: meta.mode || "tab", startedAt: meta.startedAt, durationMs, size, filename, ext, bookmarks: marks };
+  await chrome.storage.local.set({ saving });
   await chrome.storage.local.remove("pending");
   const { settings, driveConn } = await chrome.storage.local.get(["settings", "driveConn"]);
-  return { filename, startedAt: meta.startedAt, autoUpload: !!(settings && settings.autoUpload && driveConn && driveConn.url) };
+  return {
+    filename,
+    startedAt: meta.startedAt,
+    rec: saving, // what the Drive upload writes into the recording's info file
+    autoUpload: !!(settings && settings.autoUpload && driveConn && driveConn.url),
+  };
 }
 
 // Put the download into Downloads/MeetRecordings and add it to the recordings list.
@@ -305,6 +309,7 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
         bookmarks: saving.bookmarks || [],
         uploaded: false,
         driveUrl: null,
+        ...(saving.imported ? { imported: saving.imported } : {}),
       });
       await chrome.storage.local.set({ recordings });
       await chrome.storage.local.remove("saving");

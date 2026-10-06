@@ -150,10 +150,11 @@ $("save-conn").onclick = async () => {
   connectMsg("Testing the connection…");
   try {
     const conn = { url, key: await driveKey() };
-    const { email } = await driveScriptCall(conn, { action: "ping" });
+    const { email, v } = await driveScriptCall(conn, { action: "ping" });
     await chrome.storage.local.set({ driveConn: { ...conn, email } });
     $("script-url").value = conn.url; // may be the company (/a/macros/…) link
-    connectMsg(`Connected ✓ Uploads go to ${email || "your Drive"}`, "ok");
+    if (v >= 2) connectMsg(`Connected ✓ Uploads go to ${email || "your Drive"}`, "ok");
+    else connectMsg(`Connected to ${email || "your Drive"}, but with the older script. For sharing and Import, paste the code from step 1 over it, then Deploy → Manage deployments → ✏️ → New version → Deploy.`, "err");
     $("disconnect").hidden = false;
     renderDriveBtn();
   } catch (e) {
@@ -211,11 +212,12 @@ async function dropKept(rec) {
 async function pruneKept() {
   try {
     const recs = await getRecords();
-    const wanted = new Set(recs.filter((r) => !r.uploaded).map((r) => `keep-${r.startedAt}.${extOf(r)}`));
+    // Imported recordings count their days from the import, not from when they were recorded
+    const wanted = new Map(recs.filter((r) => !r.uploaded).map((r) => [`keep-${r.startedAt}.${extOf(r)}`, r.imported ? r.imported.at : r.startedAt]));
     const root = await navigator.storage.getDirectory();
     for await (const [name, h] of root.entries()) {
       if (!name.startsWith("keep-")) continue;
-      const age = Date.now() - parseInt(name.slice(5), 10);
+      const age = Date.now() - (wanted.get(name) || parseInt(name.slice(5), 10));
       if (!wanted.has(name) || !(age < KEEP_DAYS * 864e5)) await root.removeEntry(name).catch(() => {});
     }
   } catch {}
@@ -279,6 +281,7 @@ function askFolder(rec, fileName) {
   return new Promise((resolve) => {
     const d = $("dlg-upload");
     $("up-file").textContent = fileName;
+    $("up-sub").textContent = pkgBase(fileName);
     $("up-folder").value = dayName(rec.startedAt);
     $("up-where").textContent = $("up-folder").value;
     $("up-folder").oninput = () => ($("up-where").textContent = $("up-folder").value.trim());
@@ -320,15 +323,24 @@ async function uploadToDrive(rec, item) {
     const blob = await readLocalFile(rec, item);
     uploading.set(id, 0);
     showProgress(id);
-    const out = await driveUploadViaScript(conn, blob, fileName, folder, (p) => {
+    const out = await driveUploadPackage(conn, blob, rec, fileName, folder, await storedTranscript(rec), (p) => {
       uploading.set(id, p);
       showProgress(id);
     });
     uploading.delete(id);
     if (conn.url !== oldUrl) await chrome.storage.local.set({ driveConn: conn });
-    await updateRecord(id, { uploaded: true, driveUrl: out.fileUrl, folderUrl: out.folderUrl });
+    await updateRecord(id, {
+      uploaded: true,
+      driveUrl: out.fileUrl,
+      folderUrl: out.folderUrl,
+      driveFolderId: out.folderId,
+      packaged: out.packaged,
+      driveName: fileName,
+    });
     dropKept(rec);
-    toast(`"${rec.name}" uploaded to Google Drive → ${folder}`);
+    if (out.sidecarError) toast(`"${rec.name}" is on Drive, but its transcript and notes were not: ${out.sidecarError}`, true);
+    else if (!out.packaged) toast(`"${rec.name}" uploaded to Google Drive → ${folder}. Update your Drive script to keep each recording in its own folder.`);
+    else toast(`"${rec.name}" uploaded to Google Drive → ${folder} → ${pkgBase(fileName)}`);
     render();
   } catch (e) {
     uploading.delete(id);
@@ -340,6 +352,32 @@ async function uploadToDrive(rec, item) {
         : `Upload failed for "${rec.name}": ${e.message}`,
       true
     );
+  }
+}
+
+const storedTranscript = async (rec) => (await chrome.storage.local.get(trKey(rec)))[trKey(rec)] || null;
+
+// The Drive folder that holds this recording (its own folder, or the date folder for older uploads)
+const driveFolderOf = (rec) => rec.driveFolderId || ((rec.folderUrl || "").match(/\/folders\/([^/?#]+)/) || [])[1] || null;
+
+// Send the transcript + notes to Drive again (after a new transcript or edited bookmarks)
+async function syncPackage(rec, quiet) {
+  const conn = await getConn();
+  const folderId = driveFolderOf(rec);
+  if (!conn || !rec.uploaded || !folderId) {
+    if (!quiet) toast("This recording isn't on your Drive yet", true);
+    return;
+  }
+  try {
+    const { v } = await driveScriptCall(conn, { action: "ping" });
+    if (!(v >= 2)) throw new Error(DRIVE_OLD_SCRIPT);
+    const [item] = rec.downloadId ? await search({ id: rec.downloadId }) : [];
+    const videoName = rec.driveName || (item && item.filename.split(/[\\/]/).pop()) || `${rec.name} ${stampOf(rec.startedAt)}.${extOf(rec)}`;
+    await driveUploadSidecars(conn, rec, videoName, await storedTranscript(rec), { folderId }, true);
+    if (!quiet) toast("Transcript and notes updated on Drive");
+  } catch (e) {
+    // Quiet syncs only complain when the script needs updating or something real failed
+    toast(`Could not update the transcript and notes on Drive: ${e.message}`, true);
   }
 }
 
@@ -422,7 +460,22 @@ async function openDriveMenu(anchor, rec) {
     b.onclick = fn;
     return b;
   };
-  m.append(item(ICON.link, "Open on Drive", "", () => (window.open(rec.driveUrl, "_blank"), closeMenu())));
+  const folderLink = rec.packaged && rec.folderUrl;
+  if (folderLink) {
+    m.append(item(ICON.folder, "Open Drive folder", "Video, transcript and notes", () => (window.open(rec.folderUrl, "_blank"), closeMenu())));
+    m.append(
+      item(ICON.copy, "Copy share link", "Others can import it into Meet Recorder", async () => {
+        closeMenu();
+        try {
+          await navigator.clipboard.writeText(rec.folderUrl);
+          toast("Folder link copied");
+        } catch {
+          toast("Could not copy the link", true);
+        }
+      })
+    );
+  }
+  m.append(item(ICON.link, folderLink ? "Open video on Drive" : "Open on Drive", "", () => (window.open(rec.driveUrl, "_blank"), closeMenu())));
   m.append(
     item(ICON.copy, "Copy link", "", async () => {
       closeMenu();
@@ -434,8 +487,16 @@ async function openDriveMenu(anchor, rec) {
       }
     })
   );
-  if (rec.folderUrl) m.append(item(ICON.folder, "Open Drive folder", "", () => (window.open(rec.folderUrl, "_blank"), closeMenu())));
-  m.append(el("div", "mh", "Who can view"));
+  if (rec.folderUrl && !folderLink) m.append(item(ICON.folder, "Open Drive folder", "", () => (window.open(rec.folderUrl, "_blank"), closeMenu())));
+  if (driveFolderOf(rec))
+    m.append(
+      item(ICON.cloud, "Update transcript & notes", "Send the latest to Drive", async () => {
+        closeMenu();
+        toast("Updating Drive…");
+        await syncPackage(rec, false);
+      })
+    );
+  m.append(el("div", "mh", folderLink ? "Who can view the folder" : "Who can view"));
   let cur = rec.access || "private";
   const rows = [];
   const mark = () => rows.forEach(([k, b]) => {
@@ -451,8 +512,10 @@ async function openDriveMenu(anchor, rec) {
       m.classList.add("busy");
       b.querySelector("i").innerHTML = '<span class="spin"></span>';
       try {
-        if (!fileId || !getConnCache) throw new Error("Connect your Google Drive first");
-        await driveShare(getConnCache, fileId, key);
+        if (!getConnCache) throw new Error("Connect your Google Drive first");
+        const target = folderLink && rec.driveFolderId ? { folderId: rec.driveFolderId } : { fileId };
+        if (!target.folderId && !target.fileId) throw new Error("The Drive link of this recording is missing");
+        await driveShare(getConnCache, target, key);
         await updateRecord(rec.downloadId, { access: key });
         rec.access = cur = key;
         toast(`Access set: ${label}`);
@@ -486,6 +549,11 @@ async function buildCard(rec) {
   const info = el("div", "info");
   const name = el("div", "name", `<span>${esc(rec.name)}</span>`);
   name.append(el("span", "chip tab", rec.mode === "screen" ? "Screen" : "Meet tab"));
+  if (rec.imported) {
+    const chip = el("span", "chip tab", "Shared");
+    chip.title = rec.imported.by ? `Shared by ${rec.imported.by}` : "Imported from a shared Drive folder";
+    name.append(chip);
+  }
   if (rec.uploaded) name.append(el("span", "chip ok", "On Drive"));
   if (saving) name.append(el("span", "chip warn", "Saving…"));
   else if (!exists) name.append(el("span", "chip warn", rec.localDeleted ? "Removed from this PC" : "File missing"));
@@ -780,13 +848,16 @@ function saveMarksSoon(marks) {
   clearTimeout(marksTimer);
   marksTimer = setTimeout(() => saveMarks(marks), 400);
 }
+// Runs when the player closes: save pending notes, refresh the list, and send them to Drive if it's there
 function flushMarks() {
+  const rec = playerRec;
+  const synced = () => rec && rec.uploaded && syncPackage(rec, true);
   if (marksTimer) {
     clearTimeout(marksTimer);
     marksTimer = 0;
     const marks = [...$("bm-list").children].map((row) => ({ ms: Number(row.dataset.ms), note: row.querySelector(".bm-note").value }));
-    saveMarks(marks).then(() => render());
-  } else if (marksDirty) render();
+    saveMarks(marks).then(() => (render(), synced()));
+  } else if (marksDirty) render(), synced();
   marksDirty = false;
 }
 
@@ -1050,7 +1121,7 @@ function renderTranscript(segs) {
   for (const sg of trSegs) {
     const row = el("div", "tr-line");
     row.dataset.s = sg.s;
-    row.append(el("b", "", stamp(sg.s)), el("span", "", sg.t));
+    row.append(el("b", "", stamp(sg.s)), el("span", "", esc(sg.t)));
     row.onclick = () => {
       const v = $("pl-video");
       v.currentTime = sg.s;
@@ -1146,6 +1217,7 @@ async function generateTranscript() {
           [trKey(rec)]: { model: s.transcriptModel, lang: s.transcriptLang, at: Date.now(), segments: m.segments },
         });
         if (playerRec === rec) loadTranscript(rec);
+        if (rec.uploaded) syncPackage(rec, true);
       } else if (m.type === "error") {
         stopTranscribe();
         state("Failed: " + m.message);
@@ -1182,6 +1254,7 @@ $("tr-del").onclick = async () => {
   if (!playerRec || !confirm("Delete this transcript?")) return;
   await chrome.storage.local.remove(trKey(playerRec));
   loadTranscript(playerRec);
+  if (playerRec.uploaded) syncPackage(playerRec, true);
 };
 $("pl-cc").onclick = () => {
   trCC = !trCC;
@@ -1201,7 +1274,7 @@ function syncCaption() {
   }
   const cap = $("pl-cap");
   if (idx >= 0 && trCC) {
-    cap.replaceChildren(el("span", "", trSegs[idx].t));
+    cap.replaceChildren(el("span", "", esc(trSegs[idx].t)));
     cap.hidden = false;
   } else cap.hidden = true;
   if (idx !== trActive) {

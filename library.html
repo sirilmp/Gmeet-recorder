@@ -238,6 +238,11 @@
     }
     #toast.show { opacity: 1; transform: translate(-50%, 0); }
     #toast.err { background: var(--danger); color: #fff; }
+    .imp-alt { font-size: 13px; color: var(--muted); }
+    .linkbtn { all: unset; cursor: pointer; color: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+    .linkbtn:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; border-radius: 3px; }
+    body.dropping main { outline: 2px dashed var(--accent, currentColor); outline-offset: -12px; border-radius: 12px; }
+    body.dropping main::after { content: "Drop a shared recording to import it"; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 12px 18px; border-radius: 10px; background: var(--surface, #fff); box-shadow: 0 6px 24px rgba(0,0,0,.18); font-weight: 600; pointer-events: none; }
   </style>
 </head>
 <body>
@@ -245,6 +250,7 @@
     <div class="wrap">
       <span class="brand"><img src="icons/icon128.png" alt="">Meet Recorder</span>
       <span class="spacer"></span>
+      <button class="btn" id="import-btn" title="Add a recording someone shared with you from Google Drive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg><span>Import</span></button>
       <button class="btn" id="drive-btn"></button>
       <a class="btn" id="settings-btn" href="settings.html" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></a>
     </div>
@@ -332,6 +338,26 @@
   </dialog>
 
 
+  <dialog id="dlg-import">
+    <form method="dialog" class="dlg">
+      <h2>Import a shared recording</h2>
+      <div class="sub">Someone shared a Meet Recorder folder with you on Google Drive. Paste its link to add it here with its transcript and notes.</div>
+      <div>
+        <label class="field-label" for="imp-link">Google Drive folder link</label>
+        <input class="input" id="imp-link" type="url" placeholder="https://drive.google.com/drive/folders/…" autocomplete="off">
+        <div class="dlg-msg" id="imp-msg"></div>
+      </div>
+      <div class="imp-alt">Downloaded it already? <button class="linkbtn" type="button" id="imp-files">Choose the .zip or files</button> or <button class="linkbtn" type="button" id="imp-folder">a folder</button>, or drop it on this page.</div>
+      <input type="file" id="imp-file-input" accept=".zip,.json,.mp4,.webm,application/zip,application/json,video/mp4,video/webm" multiple hidden>
+      <input type="file" id="imp-folder-input" webkitdirectory multiple hidden>
+      <div class="dlg-row">
+        <span class="spacer"></span>
+        <button class="btn" type="button" id="imp-cancel">Cancel</button>
+        <button class="btn btn-primary" type="submit" id="imp-go">Import</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="dlg-files">
     <form method="dialog" class="dlg">
       <h2>Choose your recordings folder (one time)</h2>
@@ -417,7 +443,7 @@
       <div>
         <label class="field-label" for="up-folder">Folder name</label>
         <input class="input" id="up-folder" type="text" required>
-        <div class="where up-where">Saved in <b>My Drive → Meet Recordings → <span id="up-where"></span></b> (created if it doesn't exist)</div>
+        <div class="where up-where">Saved in <b>My Drive → Meet Recordings → <span id="up-where"></span> → <span id="up-sub"></span></b> with its transcript and notes (created if it doesn't exist)</div>
       </div>
       <div class="dlg-row">
         <button class="btn" value="cancel" formnovalidate>Cancel</button>
@@ -428,5 +454,6 @@
   <script src="settings-lib.js"></script><script src="drive.js"></script>
   <script src="webm-fix.js"></script>
   <script src="library.js"></script>
+  <script src="share-import.js"></script>
 </body>
 </html>

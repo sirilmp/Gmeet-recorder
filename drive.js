@@ -104,6 +104,7 @@ const DRIVE_SCRIPT = `// Meet Recorder -> your Google Drive.
 // Runs in YOUR Google account only. It can only start uploads, and only with the key below.
 const KEY = "__KEY__";
 const ROOT = "Meet Recordings";
+const VERSION = 2; // 2: one folder per recording (video + transcript + notes), folder sharing, import from a link
 
 function doPost(e) {
   let out;
@@ -116,10 +117,12 @@ function doPost(e) {
         headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
         muteHttpExceptions: true,
       });
-      out = { ok: true, email: Session.getEffectiveUser().getEmail() };
+      out = { ok: true, email: Session.getEffectiveUser().getEmail(), v: VERSION };
     }
     else if (req.action === "start") out = startUpload(req);
     else if (req.action === "share") out = shareFile(req);
+    else if (req.action === "readFolder") out = readFolder(req);
+    else if (req.action === "token") out = { ok: true, token: ScriptApp.getOAuthToken() };
     else throw new Error("Unknown action");
   } catch (err) {
     out = { ok: false, error: String(err && err.message || err) };
@@ -138,13 +141,46 @@ function authorize() {
   Logger.log("All set. Now deploy it as a Web app.");
 }
 
-// Who can open the file: private | domain (my organization) | anyone (with the link)
+// Who can open the file (or a recording's folder): private | domain (my organization) | anyone (with the link)
 function shareFile(req) {
   const A = DriveApp.Access;
   const access = { private: A.PRIVATE, domain: A.DOMAIN_WITH_LINK, anyone: A.ANYONE_WITH_LINK }[req.access];
   if (!access) throw new Error("Unknown access");
-  DriveApp.getFileById(req.fileId).setSharing(access, DriveApp.Permission.VIEW);
+  const item = req.folderId ? DriveApp.getFolderById(req.folderId) : DriveApp.getFileById(req.fileId);
+  item.setSharing(access, DriveApp.Permission.VIEW);
   return { ok: true };
+}
+
+// Import: a Meet Recorder folder someone shared with you (or a date folder holding several).
+// Returns each recording's info file and its videos, plus a short-lived key the extension uses
+// to download the video straight from Google to your PC.
+function readFolder(req) {
+  let dir;
+  try {
+    dir = DriveApp.getFolderById(req.id);
+  } catch (e) {
+    const parents = DriveApp.getFileById(req.id).getParents(); // a file link: use its folder
+    if (!parents.hasNext()) throw new Error("Share the folder link, not a file link.");
+    dir = parents.next();
+  }
+  const packages = [];
+  const scan = (d, depth) => {
+    const files = [];
+    const it = d.getFiles();
+    while (it.hasNext()) files.push(it.next());
+    const videos = files
+      .filter((f) => /\\.(mp4|webm)$/i.test(f.getName()))
+      .map((f) => ({ id: f.getId(), name: f.getName(), size: f.getSize() }));
+    files
+      .filter((f) => /\\.meetrec\\.json$/i.test(f.getName()))
+      .forEach((f) => packages.push({ meta: f.getBlob().getDataAsString(), videos: videos }));
+    if (depth > 0) {
+      const sub = d.getFolders();
+      while (sub.hasNext()) scan(sub.next(), depth - 1);
+    }
+  };
+  scan(dir, 1);
+  return { ok: true, name: dir.getName(), packages: packages, token: ScriptApp.getOAuthToken() };
 }
 
 function folder(name, parent) {
@@ -152,9 +188,20 @@ function folder(name, parent) {
   return found.hasNext() ? found.next() : parent.createFolder(name);
 }
 
+// Where the file goes: an existing folder (folderId), else Meet Recordings / path... (or / folder)
 function startUpload(req) {
-  let dir = folder(ROOT, DriveApp.getRootFolder());
-  if (req.folder) dir = folder(req.folder, dir);
+  let dir;
+  if (req.folderId) dir = DriveApp.getFolderById(req.folderId);
+  else {
+    dir = folder(ROOT, DriveApp.getRootFolder());
+    const path = req.path || (req.folder ? [req.folder] : []);
+    for (let i = 0; i < path.length; i++) if (path[i]) dir = folder(String(path[i]), dir);
+  }
+  // Updating the transcript / notes: the old copy goes to the bin
+  if (req.replace) {
+    const old = dir.getFilesByName(req.name);
+    while (old.hasNext()) old.next().setTrashed(true);
+  }
   const res = UrlFetchApp.fetch(
     "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink", {
       method: "post",
@@ -170,7 +217,7 @@ function startUpload(req) {
   const h = res.getHeaders();
   const uploadUrl = h.Location || h.location;
   if (!uploadUrl) throw new Error("Drive refused the upload: " + res.getContentText());
-  return { ok: true, uploadUrl: uploadUrl, folderUrl: dir.getUrl() };
+  return { ok: true, uploadUrl: uploadUrl, folderUrl: dir.getUrl(), folderId: dir.getId(), v: VERSION };
 }
 `;
 
@@ -233,15 +280,15 @@ async function driveScriptCall(conn, body) {
   return out;
 }
 
-// Change who can open an uploaded file (needs the newer script that has the "share" action)
-async function driveShare(conn, fileId, access) {
+const DRIVE_OLD_SCRIPT =
+  "Your Drive script is older. Open Connect Google Drive, copy the code again, paste it over the old one in the script editor, save, then Deploy → Manage deployments → ✏️ → New version → Deploy.";
+
+// Change who can open an uploaded file, or a recording's whole folder (needs the newer script)
+async function driveShare(conn, target, access) {
   try {
-    await driveScriptCall(conn, { action: "share", fileId, access });
+    await driveScriptCall(conn, { action: "share", ...target, access });
   } catch (e) {
-    if (/Unknown action/i.test(e.message))
-      throw new Error(
-        "Your Drive script is older. Open Connect Google Drive, copy the code again, paste it over the old one in the script editor, save, then Deploy → Manage deployments → ✏️ → New version → Deploy."
-      );
+    if (/Unknown action/i.test(e.message)) throw new Error(DRIVE_OLD_SCRIPT);
     throw e;
   }
 }
@@ -257,6 +304,149 @@ async function driveUploadViaScript(conn, blob, name, folderName, onProgress) {
   });
   const file = await driveSendToSession(uploadUrl, blob, onProgress);
   return { fileUrl: file.webViewLink || `https://drive.google.com/file/d/${file.id}/view`, folderUrl };
+}
+
+// ---------- Share package: video + transcript + notes, one Drive folder per recording ----------
+// Drive > Meet Recordings > <folder> > <video name without extension> >
+//   <base>.mp4               the recording
+//   <base> transcript.txt    readable transcript (when there is one)
+//   <base>.meetrec.json      name, date, length, bookmarks + notes, transcript: what Import reads back
+const PKG_FORMAT = "meet-recorder";
+const PKG_VERSION = 1;
+const PKG_SUFFIX = ".meetrec.json";
+
+const pkgBase = (videoName) => videoName.replace(/\.[^.]+$/, "");
+
+function pkgClock(ms) {
+  const s = Math.round(ms / 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${Math.floor(s / 3600)}:${p(Math.floor((s % 3600) / 60))}:${p(s % 60)}`;
+}
+
+function pkgMarks(rec) {
+  return (rec.bookmarks || []).map((b) => (typeof b === "number" ? { ms: b, note: "" } : { ms: b.ms, note: b.note || "" }));
+}
+
+// transcript: what the library stores as tr-<startedAt> ({ model, lang, at, segments }) or null
+function pkgMeta(rec, videoName, transcript, by) {
+  const segs = transcript && transcript.segments && transcript.segments.length ? transcript : null;
+  return {
+    format: PKG_FORMAT,
+    version: PKG_VERSION,
+    name: rec.name,
+    recordedAt: new Date(rec.startedAt).toISOString(),
+    startedAt: rec.startedAt,
+    durationMs: rec.durationMs,
+    mode: rec.mode || "tab",
+    video: videoName,
+    ext: rec.ext === "mp4" ? "mp4" : "webm",
+    size: rec.size,
+    recordedBy: (rec.imported && rec.imported.by) || by || null,
+    bookmarks: pkgMarks(rec),
+    transcript: segs ? { model: segs.model || null, lang: segs.lang || null, at: segs.at || null, segments: segs.segments } : null,
+    exportedAt: new Date().toISOString(),
+  };
+}
+
+function pkgTranscriptText(rec, segments) {
+  const head = `${rec.name}\nRecorded ${new Date(rec.startedAt).toLocaleString()} · ${pkgClock(rec.durationMs || 0)}\n\n`;
+  return head + segments.map((x) => `[${pkgClock(x.s * 1000)}] ${x.t}`).join("\n") + "\n";
+}
+
+// Upload the small files next to the video. where = { folderId } (newer script) or { folder } (older one).
+async function driveUploadSidecars(conn, rec, videoName, transcript, where, replace) {
+  const base = pkgBase(videoName);
+  const files = [[base + PKG_SUFFIX, "application/json", JSON.stringify(pkgMeta(rec, videoName, transcript, conn.email), null, 2)]];
+  if (transcript && transcript.segments && transcript.segments.length)
+    files.push([`${base} transcript.txt`, "text/plain", pkgTranscriptText(rec, transcript.segments)]);
+  for (const [name, mime, text] of files) {
+    const blob = new Blob([text], { type: mime });
+    const { uploadUrl } = await driveScriptCall(conn, { action: "start", name, size: blob.size, mime, replace: !!replace, ...where });
+    await driveSendToSession(uploadUrl, blob);
+  }
+}
+
+// Video first (with progress), then the transcript + notes. A newer script puts all of it in its own
+// folder; an older one ignores "path" and puts everything in <folder> like before.
+// Returns { fileUrl, folderUrl, folderId, packaged, sidecarError }.
+async function driveUploadPackage(conn, blob, rec, videoName, folderName, transcript, onProgress) {
+  const first = await driveScriptCall(conn, {
+    action: "start",
+    name: videoName,
+    folder: folderName,
+    path: [folderName, pkgBase(videoName)],
+    size: blob.size,
+    mime: blob.type || "video/webm",
+  });
+  const file = await driveSendToSession(first.uploadUrl, blob, onProgress);
+  const packaged = first.v >= 2 && !!first.folderId;
+  const out = {
+    fileUrl: file.webViewLink || `https://drive.google.com/file/d/${file.id}/view`,
+    folderUrl: first.folderUrl,
+    folderId: packaged ? first.folderId : null,
+    packaged,
+    sidecarError: null,
+  };
+  try {
+    await driveUploadSidecars(conn, rec, videoName, transcript, packaged ? { folderId: first.folderId } : { folder: folderName }, false);
+  } catch (e) {
+    out.sidecarError = e.message; // the video itself is on Drive; the extras can be sent again later
+  }
+  return out;
+}
+
+// ---------- Import from a Drive link (through the recipient's own connected script) ----------
+// Folder or file link, or a bare id
+function driveLinkId(link) {
+  const s = String(link || "").trim();
+  const m = s.match(/\/folders\/([\w-]{10,})/) || s.match(/\/file\/d\/([\w-]{10,})/) || s.match(/[?&]id=([\w-]{10,})/);
+  if (m) return m[1];
+  return /^[\w-]{10,}$/.test(s) ? s : null;
+}
+
+// { name, packages: [{ meta: <info file text>, videos: [{ id, name, size }] }], token }
+async function driveReadShared(conn, link) {
+  const id = driveLinkId(link);
+  if (!id) throw new Error("That doesn't look like a Google Drive folder link");
+  try {
+    return await driveScriptCall(conn, { action: "readFolder", id });
+  } catch (e) {
+    if (/Unknown action/i.test(e.message)) throw new Error(DRIVE_OLD_SCRIPT);
+    if (/not found|no item|access denied|permission/i.test(e.message) && !/UrlFetchApp|external_request/i.test(e.message))
+      throw new Error(`Your Drive (${conn.email || "connected account"}) can't open that folder. Ask the sender to share it with this account, or to set it to Anyone with the link.`);
+    throw e;
+  }
+}
+
+// A Drive file as a stream, downloaded in 16 MB pieces (retries a piece, renews the key when it expires)
+function driveFileStream(conn, fileId, size, token) {
+  const PIECE = 16 * 1024 * 1024;
+  let offset = 0;
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
+  return new ReadableStream({
+    async pull(ctl) {
+      if (size && offset >= size) return ctl.close();
+      const end = size ? Math.min(offset + PIECE, size) - 1 : offset + PIECE - 1;
+      let res;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Range: `bytes=${offset}-${end}` } });
+          if (res.status === 401 && attempt < 5) token = (await driveScriptCall(conn, { action: "token" })).token;
+          else if (res.status < 500 || attempt >= 5) break;
+        } catch (e) {
+          if (attempt >= 5) throw e;
+        }
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** Math.min(attempt, 4)));
+      }
+      if (res.status === 416) return ctl.close(); // past the end
+      if (!res.ok) throw new Error(`Drive download failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+      const buf = new Uint8Array(await res.arrayBuffer());
+      offset += buf.byteLength;
+      if (buf.byteLength) ctl.enqueue(buf);
+      // No size known, or Drive sent the whole file at once: stop when a piece comes back short
+      if (res.status === 200 || (!size && buf.byteLength < PIECE)) ctl.close();
+    },
+  });
 }
 
 // Whole flow: today's folder -> upload -> make public. Returns { fileUrl, folderUrl, shared }.

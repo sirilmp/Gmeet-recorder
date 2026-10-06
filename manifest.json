@@ -9,6 +9,7 @@
     "offscreen",
     "identity",
     "storage",
+    "unlimitedStorage",
     "activeTab",
     "downloads",
     "contextMenus",

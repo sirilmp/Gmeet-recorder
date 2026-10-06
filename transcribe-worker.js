@@ -11,9 +11,7 @@ env.backends.onnx.wasm.wasmPaths = {
   wasm: new URL("./vendor/ort-wasm-simd-threaded.asyncify.wasm", import.meta.url).href,
 };
 
-const SLICE = 30; // seconds per Whisper window
 const RATE = 16000;
-let cancelled = false;
 let loaded = { model: null, pipe: null };
 
 async function load(model) {
@@ -39,50 +37,35 @@ async function load(model) {
   return pipe;
 }
 
+// One 30 s slice at a time: {type: "slice", id, audio (16 kHz mono), offset (seconds), model, language}
+// -> {type: "segments", id, segments: [{s, e, t}]} with times on the recording's timeline.
 onmessage = async (e) => {
   const m = e.data;
-  if (m.type === "cancel") {
-    cancelled = true;
-    return;
-  }
-  if (m.type !== "run") return;
-  cancelled = false;
+  if (m.type !== "slice") return;
   try {
-    postMessage({ type: "status", text: "Loading the speech model…" });
     const pipe = await load(m.model);
-    const audio = m.audio;
-    const total = Math.ceil(audio.length / (SLICE * RATE));
+    const part = m.audio;
     const segments = [];
-    for (let i = 0; i < total; i++) {
-      if (cancelled) {
-        postMessage({ type: "cancelled" });
-        return;
+    // skip silence quickly
+    let peak = 0;
+    for (let k = 0; k < part.length; k += 16) peak = Math.max(peak, Math.abs(part[k]));
+    if (peak > 0.003 && part.length > RATE * 0.5) {
+      const opts = { return_timestamps: true };
+      if (!/\.en$/.test(m.model)) {
+        opts.task = "transcribe";
+        if (m.language && m.language !== "auto") opts.language = m.language;
       }
-      const from = i * SLICE * RATE;
-      const part = audio.subarray(from, Math.min(audio.length, from + SLICE * RATE));
-      // skip silence quickly
-      let peak = 0;
-      for (let k = 0; k < part.length; k += 16) peak = Math.max(peak, Math.abs(part[k]));
-      if (peak > 0.003 && part.length > RATE * 0.5) {
-        const opts = { return_timestamps: true };
-        if (!/\.en$/.test(m.model)) {
-          opts.task = "transcribe";
-          if (m.language && m.language !== "auto") opts.language = m.language;
-        }
-        const out = await pipe(part, opts);
-        const base = i * SLICE;
-        for (const c of out.chunks || []) {
-          const text = (c.text || "").trim();
-          if (!text) continue;
-          const s = base + (c.timestamp[0] ?? 0);
-          const en = base + (c.timestamp[1] ?? c.timestamp[0] + 2);
-          segments.push({ s: Math.round(s * 10) / 10, e: Math.round(en * 10) / 10, t: text });
-        }
+      const out = await pipe(part, opts);
+      for (const c of out.chunks || []) {
+        const text = (c.text || "").trim();
+        if (!text) continue;
+        const s = m.offset + (c.timestamp[0] ?? 0);
+        const en = m.offset + (c.timestamp[1] ?? c.timestamp[0] + 2);
+        segments.push({ s: Math.round(s * 10) / 10, e: Math.round(en * 10) / 10, t: text });
       }
-      postMessage({ type: "progress", done: i + 1, total, segments });
     }
-    postMessage({ type: "done", segments });
+    postMessage({ type: "segments", id: m.id, segments });
   } catch (err) {
-    postMessage({ type: "error", message: String((err && err.message) || err) });
+    postMessage({ type: "error", id: m.id, message: String((err && err.message) || err) });
   }
 };

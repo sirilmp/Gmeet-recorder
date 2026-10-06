@@ -5,6 +5,7 @@ const SETTINGS_DEFAULTS = {
   deleteUploaded: false, // remove the local file once it is safely on Drive
   deleteAfterDays: 0, // remove local files older than this many days (0 = never)
   autoRecord: "ask", // "ask" = offer to record when I join a meeting, "off" = never
+  autoTranscribe: true, // make a transcript of every new recording in the background
   transcriptModel: "onnx-community/whisper-base", // speech model used for transcripts (runs on this PC)
   transcriptLang: "auto", // spoken language, or auto-detect
 };

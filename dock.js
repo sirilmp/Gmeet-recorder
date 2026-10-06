@@ -52,7 +52,7 @@
     </style>
     <div class="bar" id="bar">
       <div class="grip" id="grip" title="Drag to move"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></svg></div>
-      <button id="start" class="rec" title="Opens the recorder, then press Start"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>Record</button>
+      <button id="start" class="rec" title="Start recording this meeting"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>Record</button>
       <span id="live" class="live" hidden><span class="dot"></span><span class="time" id="time">0:00</span></span>
       <button id="mark" class="icon" title="Add a bookmark here" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button>
       <button id="stop" title="Stop and save" hidden><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Stop</button>
@@ -126,6 +126,7 @@
       st = await chrome.storage.session.get(["recording", "startedAt"]);
     } catch {}
     const rec = !!st.recording;
+    if (!rec && feed && feed.live) stopFeed(); // the recording ended: stop sharing the tab
     if (rec) hideAsk();
     $("start").hidden = rec;
     $("live").hidden = !rec;
@@ -140,13 +141,103 @@
     place();
   }
 
+  // ---- sharing this tab with the recorder ----
+  // Chrome lets the extension capture a tab only after a click on the extension itself (toolbar icon,
+  // shortcut, right-click menu). A click here doesn't count, so the page shares its own tab instead
+  // (Chrome asks "Share this tab?") and sends it to the recorder over a local WebRTC link.
+  let feed = null; // { stream, pc, ice, live }
+  const toRecorder = (msg) => chrome.runtime.sendMessage({ target: "offscreen", type: "feed-signal", ...msg }).catch(() => {});
+  function stopFeed() {
+    if (!feed) return;
+    if (feed.pc) feed.pc.close();
+    feed.stream.getTracks().forEach((t) => t.stop());
+    feed = null;
+  }
+  async function shareTab() {
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { max: 30 } },
+        audio: { suppressLocalAudioPlayback: false },
+        preferCurrentTab: true,
+        selfBrowserSurface: "include",
+        surfaceSwitching: "exclude",
+        systemAudio: "exclude",
+        monitorTypeSurfaces: "exclude",
+      });
+    } catch {
+      return "Not started: the share prompt was closed.";
+    }
+    const [v] = stream.getVideoTracks();
+    if (!stream.getAudioTracks().length || (v && v.getSettings().displaySurface !== "browser")) {
+      stream.getTracks().forEach((t) => t.stop());
+      return "Not started: share this tab, with “Also share tab audio” on, so the voices are recorded.";
+    }
+    feed = { stream, pc: null, ice: [], live: false };
+    // Chrome's "Stop sharing" ends the recording too
+    v.addEventListener("ended", () => {
+      if (!feed || feed.stream !== stream) return;
+      stopFeed();
+      send({ type: "stop" });
+      note("Saving…", true);
+    });
+    const res = await send({ type: "dock-start", feed: true });
+    if (res && res.ok) {
+      if (feed) feed.live = true;
+      return null;
+    }
+    stopFeed();
+    return (res && res.error) || "Couldn't start the recording.";
+  }
+  async function answerFeed(o) {
+    if (!feed) return;
+    if (feed.pc) feed.pc.close();
+    const pc = (feed.pc = new RTCPeerConnection({ iceServers: [] }));
+    const mine = feed;
+    pc.onicecandidate = (e) => {
+      if (e.candidate && feed === mine && mine.pc === pc) toRecorder({ kind: "ice", candidate: e.candidate.toJSON() });
+    };
+    await pc.setRemoteDescription({ type: "offer", sdp: o.sdp });
+    const [v] = mine.stream.getVideoTracks();
+    const [a] = mine.stream.getAudioTracks();
+    v.applyConstraints({ width: { max: o.w }, height: { max: o.h }, frameRate: { max: o.fps } }).catch(() => {});
+    for (const t of pc.getTransceivers()) {
+      await t.sender.replaceTrack(t.receiver.track.kind === "video" ? v : a);
+      t.direction = "sendonly";
+    }
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    // A local link: spend the bits on a sharp picture
+    for (const sn of pc.getSenders()) {
+      if (!sn.track || sn.track.kind !== "video") continue;
+      const prm = sn.getParameters();
+      prm.degradationPreference = "maintain-resolution";
+      if (prm.encodings && prm.encodings[0]) prm.encodings[0].maxBitrate = 8_000_000;
+      sn.setParameters(prm).catch(() => {});
+    }
+    toRecorder({ kind: "answer", sdp: answer.sdp });
+    for (const c of mine.ice.splice(0)) pc.addIceCandidate(c).catch(() => {});
+  }
+  chrome.runtime.onMessage.addListener((m) => {
+    if (m.target !== "tab" || !m.msg || !feed) return;
+    if (m.msg.kind === "feed-offer") answerFeed(m.msg).catch((e) => console.warn("[Meet Recorder] feed", e));
+    else if (m.msg.kind === "feed-ice") {
+      if (feed.pc && feed.pc.remoteDescription) feed.pc.addIceCandidate(m.msg.candidate).catch(() => {});
+      else feed.ice.push(m.msg.candidate);
+    }
+  });
+
   $("start").onclick = async () => {
-    // Chrome only lets a recording start from the extension itself, so open its popup: one click on Start there
-    const res = await send({ type: "open-popup" });
-    if (res && res.ok) return;
-    note("Click the Meet Recorder icon in the toolbar, or press Alt+Shift+S, or right-click this page → Meet Recorder → Start recording.", true);
-    clearTimeout(noteTimer);
-    noteTimer = setTimeout(() => ($("note").hidden = true), 9000);
+    $("start").disabled = true;
+    try {
+      // Starts with the popup's saved choices
+      const res = await send({ type: "dock-start" });
+      if (res && res.ok) return;
+      const err = res && res.needShare ? await shareTab() : (res && res.error) || "Couldn't start the recording.";
+      if (err) note(err, false);
+    } finally {
+      $("start").disabled = false;
+    }
   };
   $("stop").onclick = async () => {
     $("stop").disabled = true;

@@ -1233,7 +1233,18 @@ let paintPlayerTicks = () => {};
     const i = RATES.indexOf(v.playbackRate);
     v.playbackRate = RATES[(i + 1) % RATES.length];
   };
-  v.addEventListener("ratechange", () => ($("pl-rate").textContent = v.playbackRate + "×"));
+  // Speed is a preference, not per recording: keep the last one picked and start every video at it.
+  // Loading a new src resets playbackRate to defaultPlaybackRate, so keep the two in step.
+  v.addEventListener("ratechange", () => {
+    $("pl-rate").textContent = v.playbackRate + "×";
+    if (v.defaultPlaybackRate !== v.playbackRate) v.defaultPlaybackRate = v.playbackRate;
+    localStorage.setItem("playbackRate", v.playbackRate);
+  });
+  const savedRate = Number(localStorage.getItem("playbackRate"));
+  if (RATES.includes(savedRate)) {
+    v.defaultPlaybackRate = v.playbackRate = savedRate;
+    $("pl-rate").textContent = savedRate + "×";
+  }
   $("pl-pip").onclick = () => (document.pictureInPictureElement ? document.exitPictureInPicture() : v.requestPictureInPicture()).catch(() => {});
   // F / the button in the controls: the video alone, full screen
   $("pl-full").onclick = () => (document.fullscreenElement === stage ? document.exitFullscreen() : stage.requestFullscreen()).catch(() => {});

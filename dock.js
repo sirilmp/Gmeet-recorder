@@ -11,40 +11,52 @@
   root.innerHTML = `
     <style>
       :host { all: initial; }
-      .bar { display: flex; align-items: center; gap: 4px; padding: 5px; border-radius: 999px;
-        background: rgba(24,27,52,.94); color: #fff; font: 600 13px/1 "Segoe UI", system-ui, sans-serif;
-        box-shadow: 0 6px 24px rgba(0,0,0,.35); user-select: none; backdrop-filter: blur(6px); }
-      .grip { width: 22px; height: 30px; display: grid; place-items: center; cursor: grab; opacity: .55; }
+      .bar { display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 12px;
+        background: rgba(28,28,27,.92); color: #ececea; font: 550 13px/1 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+        box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 8px 28px rgba(0,0,0,.4); user-select: none; backdrop-filter: blur(12px); }
+      .grip { width: 18px; height: 30px; display: grid; place-items: center; cursor: grab; opacity: .4; }
+      .grip:hover { opacity: .75; }
       .grip:active { cursor: grabbing; }
-      button { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; gap: 7px;
-        height: 32px; padding: 0 12px; border-radius: 999px; background: rgba(255,255,255,.1); color: #fff; font: inherit; }
-      button:hover { background: rgba(255,255,255,.2); }
-      button.rec { background: #d93025; } button.rec:hover { background: #ea4335; }
-      button.icon { padding: 0; width: 32px; justify-content: center; }
-      svg { width: 15px; height: 15px; }
-      .dot { width: 9px; height: 9px; border-radius: 50%; background: #ff5a4d; animation: p 1.2s infinite; }
+      .grip svg { width: 13px; height: 13px; }
+      button { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+        height: 30px; padding: 0 11px; border-radius: 8px; color: #ececea; font: inherit; transition: background .12s; }
+      button:hover { background: rgba(255,255,255,.1); }
+      button:focus-visible { box-shadow: 0 0 0 2px rgba(255,255,255,.5); }
+      button.rec { background: #e5484d; color: #fff; } button.rec:hover { background: #ec5d5e; }
+      button.icon { padding: 0; width: 30px; justify-content: center; color: #a3a39e; }
+      button.icon:hover { color: #fff; }
+      svg { width: 14px; height: 14px; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #ec5d5e; animation: p 1.6s ease-in-out infinite; flex: none; }
       @keyframes p { 50% { opacity: .35; } }
-      .time { font-variant-numeric: tabular-nums; min-width: 52px; }
-      .note { position: absolute; top: 100%; left: 0; margin-top: 6px; max-width: 280px; padding: 8px 12px; border-radius: 10px;
-        background: #3a1c24; color: #ffd9d9; font: 500 12px/1.4 "Segoe UI", system-ui, sans-serif; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
-      .note.ok { background: #173325; color: #c9f2d9; }
+      @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+      .live { display: inline-flex; align-items: center; gap: 7px; padding: 0 8px 0 6px; }
+      .time { font: 500 12.5px/1 ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; min-width: 38px; color: #fff; }
+      .div { width: 1px; height: 16px; background: rgba(255,255,255,.12); margin: 0 2px; }
+      .note { position: absolute; top: 100%; left: 0; margin-top: 6px; max-width: 280px; padding: 8px 11px; border-radius: 9px;
+        background: rgba(28,28,27,.95); color: #f5b4b5; font: 500 12px/1.45 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+        box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 8px 28px rgba(0,0,0,.4); }
+      .note.ok { color: #ececea; }
       .ask { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); width: 340px; max-width: calc(100vw - 24px);
-        padding: 14px 16px; border-radius: 16px; background: rgba(24,27,52,.97); color: #fff; box-shadow: 0 10px 40px rgba(0,0,0,.45);
-        font: 500 13px/1.45 "Segoe UI", system-ui, sans-serif; border: 1px solid rgba(255,255,255,.12); }
-      .ask h3 { margin: 0 0 4px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
-      .ask p { margin: 0 0 12px; color: #c9cbe6; }
-      .ask kbd { background: rgba(255,255,255,.16); border-radius: 6px; padding: 2px 7px; font: 600 12px "Segoe UI", system-ui; color: #fff; white-space: nowrap; }
-      .ask .row { display: flex; gap: 8px; justify-content: flex-end; }
+        padding: 14px 16px; border-radius: 14px; background: rgba(28,28,27,.97); color: #ececea;
+        box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 16px 48px rgba(0,0,0,.5);
+        font: 400 13px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif; }
+      .ask h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; color: #fff; }
+      .ask p { margin: 0 0 12px; color: #a3a39e; }
+      .ask b { color: #ececea; font-weight: 550; }
+      .ask kbd { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.14); border-radius: 5px; padding: 1px 6px; font: 500 11.5px ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: #fff; white-space: nowrap; }
+      .ask .row { display: flex; gap: 6px; justify-content: flex-end; }
       .ask .row button { height: 30px; font-size: 12.5px; }
+      .ask .row button:not(.rec) { color: #a3a39e; } .ask .row button:not(.rec):hover { color: #fff; }
+      .ask .row button.rec { background: #ececea; color: #1a1a19; } .ask .row button.rec:hover { background: #fff; }
       [hidden] { display: none !important; }
     </style>
     <div class="bar" id="bar">
       <div class="grip" id="grip" title="Drag to move"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></svg></div>
-      <button id="start" class="rec" title="Opens the recorder, then press Start"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="6"/></svg>Record</button>
-      <span id="live" hidden style="display:inline-flex;align-items:center;gap:7px;padding:0 6px"><span class="dot"></span><span class="time" id="time">0:00</span></span>
+      <button id="start" class="rec" title="Opens the recorder, then press Start"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>Record</button>
+      <span id="live" class="live" hidden><span class="dot"></span><span class="time" id="time">0:00</span></span>
       <button id="mark" class="icon" title="Add a bookmark here" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button>
       <button id="stop" title="Stop and save" hidden><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Stop</button>
-      <button id="hide" class="icon" title="Hide this bar (turn it back on in Settings)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <span class="div"></span><button id="hide" class="icon" title="Hide this bar (turn it back on in Settings)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
     <div class="note" id="note" hidden></div>
     <div class="ask" id="ask" hidden>

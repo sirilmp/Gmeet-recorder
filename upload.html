@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Upload to Google Drive</title>
+  <style>
+    body { max-width: 560px; margin: 40px auto; font: 15px system-ui, sans-serif; color: #202124; padding: 0 16px; }
+    button { padding: 9px 16px; border: 0; border-radius: 6px; background: #1a73e8; color: #fff; font-size: 14px; cursor: pointer; }
+    button:disabled { opacity: .5; }
+    progress { width: 100%; margin-top: 16px; }
+    #log { margin-top: 12px; color: #5f6368; white-space: pre-wrap; }
+    .err { color: #d93025; }
+  </style>
+</head>
+<body>
+  <h2>Upload recordings to Google Drive</h2>
+  <p>Select the .webm files saved in your Downloads folder.</p>
+  <input type="file" id="files" accept="video/webm,.webm" multiple>
+  <p><button id="go" disabled>Upload</button></p>
+  <progress id="bar" value="0" max="100" hidden></progress>
+  <div id="log"></div>
+  <script src="upload.js"></script>
+</body>
+</html>

@@ -1,0 +1,93 @@
+{
+  "manifest_version": 3,
+  "name": "Meet Recorder",
+  "version": "1.0.0",
+  "description": "Record Google Meet (screen share + all voices + your mic), save locally, upload to Google Drive later.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "tabCapture",
+    "offscreen",
+    "identity",
+    "storage",
+    "activeTab",
+    "downloads",
+    "contextMenus",
+    "downloads.open",
+    "desktopCapture"
+  ],
+  "host_permissions": [
+    "https://meet.google.com/*",
+    "https://www.googleapis.com/*",
+    "https://script.google.com/*",
+    "https://script.googleusercontent.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "js": [
+        "share-hook.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true,
+      "match_origin_as_fallback": true
+    },
+    {
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "js": [
+        "dock.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_origin_as_fallback": true
+    }
+  ],
+  "commands": {
+    "toggle-recording": {
+      "suggested_key": { "default": "Alt+Shift+S" },
+      "description": "Start / stop recording the current Meet tab"
+    },
+    "add-bookmark": {
+      "suggested_key": { "default": "Alt+Shift+B" },
+      "description": "Add a bookmark at this moment of the recording"
+    }
+  },
+  "action": {
+    "default_title": "Meet Recorder",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "oauth2": {
+    "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/drive.file"
+    ]
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

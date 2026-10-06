@@ -1,0 +1,389 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="icon" href="icons/icon32.png">
+  <title>Meet Recordings</title>
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    .hero {
+      background: linear-gradient(135deg, var(--primary), var(--primary-2));
+      color: #fff;
+      padding: 30px 20px 64px;
+    }
+    .wrap { max-width: 900px; margin: 0 auto; }
+    .hero .wrap { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .hero h1 { margin: 0; font-size: 24px; }
+    .hero p { margin: 2px 0 0; opacity: .85; }
+    .logo { width: 48px; height: 48px; border-radius: 14px; background: rgba(255,255,255,.2); display: grid; place-items: center; }
+    .logo img { width: 100%; height: 100%; border-radius: inherit; display: block; }
+    .logo svg { width: 26px; height: 26px; }
+    .stats { margin-left: auto; display: flex; gap: 10px; }
+    .stat { background: rgba(255,255,255,.18); border-radius: 12px; padding: 8px 14px; text-align: center; }
+    .stat b { display: block; font-size: 18px; }
+    .stat span { font-size: 11.5px; opacity: .85; }
+
+    main { margin-top: -38px; padding: 0 20px 40px; }
+    .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
+    .search { position: relative; flex: 1; }
+    .search svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+    .search .input { padding-left: 38px; box-shadow: var(--shadow); }
+    .path { color: var(--muted); font-size: 12px; margin: 0 2px 12px; }
+
+    .card {
+      display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+      padding: 14px 16px; margin-bottom: 10px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); box-shadow: var(--shadow);
+    }
+    .thumb {
+      width: 46px; height: 46px; border-radius: 12px; flex: none;
+      background: var(--primary-soft); color: var(--primary);
+      display: grid; place-items: center;
+    }
+    .thumb svg { width: 22px; height: 22px; }
+    .info { flex: 1; min-width: 200px; }
+    .name { font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .meta { display: flex; gap: 6px 14px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+    .meta span { display: inline-flex; align-items: center; gap: 5px; }
+    .meta svg { width: 14px; height: 14px; }
+    .marks { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    .mark { border: 0; cursor: pointer; font-family: inherit; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; padding: 2px 8px; border-radius: 99px; background: var(--warn-soft); color: var(--warn); }
+    .mark svg { width: 11px; height: 11px; }
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+    /* Small status badges next to the meeting name */
+    .name .chip { flex: none; white-space: nowrap; font-size: 11px; }
+    .chip.tab { background: var(--primary-soft); color: var(--primary); }
+
+    /* Day sections (Today / Yesterday / date), collapsible */
+    .day { margin-bottom: 14px; }
+    .day > summary {
+      list-style: none; cursor: pointer; user-select: none;
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 4px; margin-bottom: 6px;
+      font-weight: 700; font-size: 14px; color: var(--text);
+    }
+    .day > summary::-webkit-details-marker { display: none; }
+    .day > summary .chev {
+      width: 22px; height: 22px; border-radius: 7px; flex: none;
+      display: grid; place-items: center;
+      background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+      transition: transform .2s;
+    }
+    .day > summary .chev svg { width: 14px; height: 14px; }
+    .day[open] > summary .chev { transform: rotate(90deg); }
+    .day > summary .sum { color: var(--muted); font-weight: 500; font-size: 12.5px; }
+    .day > summary .line { flex: 1; height: 1px; background: var(--border); }
+    .day > summary:hover .chev { border-color: var(--primary); color: var(--primary); }
+    .day > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 8px; }
+    .day-body { animation: dayIn .18s ease-out; }
+    @keyframes dayIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+    @media (prefers-reduced-motion: reduce) { .day-body { animation: none; } .day > summary .chev { transition: none; } }
+    
+
+    /* Google Drive connect / upload dialogs */
+    dialog {
+      border: 1px solid var(--border); border-radius: 16px; padding: 0;
+      background: var(--surface); color: var(--text); box-shadow: 0 20px 60px rgba(0,0,0,.35);
+      width: min(560px, calc(100vw - 32px));
+    }
+    dialog::backdrop { background: rgba(10,12,30,.55); }
+    .dlg { padding: 20px 22px; display: grid; gap: 14px; }
+    .dlg h2 { margin: 0; font-size: 18px; }
+    .dlg .sub { color: var(--muted); font-size: 13px; margin-top: -8px; }
+    ol.steps { margin: 0; padding-left: 20px; }
+    .steps { display: grid; gap: 8px; font-size: 13.5px; line-height: 1.5; }
+    .step { border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+    .step[open] { border-color: var(--primary); }
+    .step summary { cursor: pointer; padding: 10px 12px; font-weight: 600; display: flex; align-items: center; gap: 10px; list-style: none; }
+    .step summary::-webkit-details-marker { display: none; }
+    .step summary::after { content: "▾"; margin-left: auto; color: var(--muted); transition: transform .15s; }
+    .step:not([open]) summary::after { transform: rotate(-90deg); }
+    .step .n { width: 22px; height: 22px; border-radius: 50%; background: var(--primary); color: #fff; font-size: 12px; display: grid; place-items: center; flex: none; }
+    .step .body { padding: 0 12px 12px 44px; display: grid; gap: 8px; justify-items: start; }
+    .step .body p { margin: 0; }
+    .step .body .input, .step .body .code { justify-self: stretch; }
+    .step .body .btn { padding: 4px 10px; font-size: 12px; }
+    .step .where { color: var(--muted); font-size: 12px; }
+    .steps b { color: var(--text); }
+    .steps a { color: var(--primary); font-weight: 600; }
+    .code { position: relative; }
+    .code textarea {
+      width: 100%; height: 92px; resize: none; box-sizing: border-box;
+      font: 11.5px/1.45 ui-monospace, Consolas, monospace; color: var(--muted);
+      background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px;
+    }
+    .code .btn { position: absolute; right: 8px; top: 8px; padding: 5px 10px; font-size: 12px; }
+    .actions .btn { height: 38px; box-sizing: border-box; justify-content: center; }
+    .actions .btn span:empty { display: none; }
+    .actions .btn:has(> span:empty) { width: 42px; padding: 0; }
+    .btn-upload { color: var(--primary); border-color: var(--primary); }
+    .btn-upload:hover { background: var(--primary-soft); }
+    .recover { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 14px; margin-bottom: 14px; border: 1.5px solid var(--danger); border-radius: 12px; background: var(--danger-soft); }
+    .recover .rt { flex: 1; min-width: 200px; font-size: 13px; }
+    .recover .rt b { display: block; font-size: 13.5px; }
+    .recover .rt span { color: var(--muted); }
+    .menu { position: fixed; z-index: 50; min-width: 250px; padding: 6px; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); box-shadow: 0 12px 32px rgba(0,0,0,.35); display: grid; gap: 2px; }
+    .menu .mi { display: flex; align-items: center; gap: 10px; text-align: left; padding: 8px 10px; border: 0; border-radius: 8px; background: none; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+    .menu .mi:hover { background: var(--surface-2); }
+    .menu .mi svg { width: 16px; height: 16px; flex: none; color: var(--muted); }
+    .menu .mi small { display: block; color: var(--muted); font-size: 11.5px; }
+    .menu .mi i { margin-left: auto; color: var(--primary); font-style: normal; font-weight: 700; }
+    .menu .mi.on { background: var(--primary-soft); }
+    .menu.busy .mi { pointer-events: none; opacity: .75; }
+    .menu .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: menuspin .7s linear infinite; }
+    @keyframes menuspin { to { transform: rotate(360deg); } }
+    .menu .mh { padding: 8px 10px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border-top: 1px solid var(--border); margin-top: 4px; }
+    dialog.player { width: min(960px, 94vw); max-width: none; }
+    .pl-stage { position: relative; background: #000; border-radius: 10px; overflow: hidden; }
+    .pl-stage:fullscreen { border-radius: 0; display: flex; }
+    #pl-video { width: 100%; max-height: 66vh; display: block; background: #000; cursor: pointer; }
+    .pl-stage:fullscreen #pl-video { max-height: none; height: 100%; }
+    .pl-ctl { position: absolute; left: 0; right: 0; bottom: 0; padding: 26px 12px 8px; color: #fff;
+      background: linear-gradient(transparent, rgba(0,0,0,.78)); transition: opacity .2s; }
+    .pl-stage.idle .pl-ctl { opacity: 0; pointer-events: none; } .pl-stage.idle { cursor: none; }
+    .pl-seek { position: relative; height: 16px; cursor: pointer; touch-action: none; }
+    .pl-seek::before { content: ""; position: absolute; left: 0; right: 0; top: 6px; height: 4px; border-radius: 4px; background: rgba(255,255,255,.28); }
+    .pl-buf, .pl-fill { position: absolute; left: 0; top: 6px; height: 4px; border-radius: 4px; width: 0; }
+    .pl-buf { background: rgba(255,255,255,.35); } .pl-fill { background: #fff; }
+    .pl-seek:hover::before, .pl-seek:hover .pl-buf, .pl-seek:hover .pl-fill { top: 5px; height: 6px; }
+    .pl-knob { position: absolute; top: 3px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; background: #fff; left: 0; box-shadow: 0 0 0 3px rgba(255,255,255,.25); }
+    .pl-ticks i { position: absolute; top: 4px; width: 4px; height: 8px; margin-left: -2px; border-radius: 2px; background: #ffb340; }
+    .pl-row { display: flex; align-items: center; gap: 2px; }
+    .pl-sp { flex: 1; }
+    .pb { all: unset; cursor: pointer; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 8px; color: #fff; }
+    .pb:hover { background: rgba(255,255,255,.18); } .pb:focus-visible { outline: 2px solid #fff; }
+    .pb svg { width: 20px; height: 20px; } .pb.txt { width: auto; padding: 0 9px; font: 600 13px system-ui; }
+    .pl-time { white-space: nowrap; font: 500 12.5px system-ui; font-variant-numeric: tabular-nums; margin-left: 8px; opacity: .92; }
+    #pl-vol { width: 70px; accent-color: #fff; }
+    @media (max-width: 560px) { #pl-vol { display: none; } .pl-time { margin-left: 4px; } }
+    .pl-cap { position: absolute; left: 8%; right: 8%; bottom: 74px; text-align: center; pointer-events: none; }
+    .pl-cap span { display: inline-block; max-width: 100%; padding: 4px 10px; border-radius: 6px; background: rgba(0,0,0,.72); color: #fff; font: 500 17px/1.35 system-ui, sans-serif; }
+    .pl-stage:fullscreen .pl-cap span { font-size: 26px; }
+    .pb.txt.on { background: rgba(255,255,255,.9); color: #000; }
+    .tr { display: grid; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
+    .tr-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .tr-head .btn { padding: 5px 12px; font-size: 12.5px; }
+    .tr-state { color: var(--muted); font-size: 12.5px; }
+    .tr-bar { height: 5px; border-radius: 5px; background: var(--border); overflow: hidden; }
+    .tr-bar i { display: block; height: 100%; width: 0; background: var(--primary); transition: width .3s; }
+    .tr-list { max-height: 210px; overflow: auto; display: grid; gap: 2px; font-size: 13.5px; line-height: 1.45; }
+    .tr-line { display: flex; gap: 10px; padding: 5px 8px; border-radius: 8px; cursor: pointer; }
+    .tr-line:hover { background: var(--border); }
+    .tr-line.on { background: var(--primary-soft, rgba(110,86,255,.16)); }
+    .tr-line b { flex: none; width: 52px; color: var(--primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+    .pl-big { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px; border-radius: 50%; background: rgba(0,0,0,.55);
+      display: grid; place-items: center; color: #fff; pointer-events: none; animation: plpop .55s forwards; }
+    .pl-big svg { width: 30px; height: 30px; }
+    @keyframes plpop { to { opacity: 0; transform: scale(1.35); } }
+    .pl-marks { display: flex; gap: 6px; flex-wrap: wrap; }
+    .pl-marks button { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 3px 10px; border-radius: 99px; background: var(--warn-soft); color: var(--warn); }
+    .pl-marks button:hover { filter: brightness(1.1); outline: 1px solid var(--warn); }
+    .pl-marks svg { width: 11px; height: 11px; }
+    .dlg-row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+    .dlg-row .spacer { flex: 1; }
+    .dlg-msg { font-size: 13px; min-height: 18px; }
+    .dlg-msg.ok { color: var(--success); font-weight: 600; }
+    .dlg-msg.err { color: var(--danger); font-weight: 600; }
+    .where { font-size: 12.5px; color: var(--muted); }
+    #drive-btn.on { color: var(--success); }
+    .card progress { width: 110px; height: 8px; accent-color: var(--primary); }
+
+    .empty { text-align: center; padding: 56px 20px; color: var(--muted); background: var(--surface); border: 1px dashed var(--border); border-radius: var(--radius); }
+    .empty svg { width: 44px; height: 44px; color: var(--primary); margin-bottom: 8px; }
+    .empty h3 { margin: 0 0 4px; color: var(--text); }
+
+    #toast {
+      position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px);
+      padding: 11px 18px; border-radius: 12px; background: #1f2340; color: #fff;
+      box-shadow: 0 8px 24px rgba(0,0,0,.3); opacity: 0; pointer-events: none;
+      transition: opacity .2s, transform .2s; max-width: 90vw; z-index: 10;
+    }
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
+    #toast.err { background: #b91c1c; }
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <div class="wrap">
+      <div class="logo">
+        <img src="icons/icon128.png" alt="">
+      </div>
+      <div>
+        <h1>Meet Recordings</h1>
+        <p>Open, manage and upload your recorded meetings</p>
+      </div>
+      <div class="stats">
+        <div class="stat"><b id="stat-count">0</b><span>Recordings</span></div>
+        <div class="stat"><b id="stat-size">0 MB</b><span>Total size</span></div>
+      </div>
+    </div>
+  </div>
+
+  <main>
+    <div class="wrap">
+      <div class="toolbar">
+        <div class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <input class="input" id="search" type="search" placeholder="Search by meeting name…">
+        </div>
+        <button class="btn" id="drive-btn"></button>
+        <a class="btn" id="settings-btn" href="settings.html" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></a>
+      </div>
+      <div class="path">Saved in your Downloads folder → <b>MeetRecordings</b></div>
+      <div id="recover"></div>
+      <div id="list"></div>
+      <div class="empty" id="empty" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="15" height="14" rx="2"/><path d="M18 10l4-2v8l-4-2"/></svg>
+        <h3>No recordings yet</h3>
+        <div>Start a recording from the extension icon while you're in a Meet call.</div>
+      </div>
+    </div>
+  </main>
+
+  <div id="toast"></div>
+
+  <dialog id="dlg-connect">
+    <form method="dialog" class="dlg">
+      <h2>Connect your Google Drive</h2>
+      <div class="sub">One time, about 2 minutes. Uploads go into <b>your</b> Drive, and no Google Cloud setup is needed.</div>
+      <div class="steps" id="steps">
+        <details class="step" open>
+          <summary><span class="n">1</span>Create a new script</summary>
+          <div class="body">
+            <p>Open <a href="https://script.google.com/home/projects/create" target="_blank">script.google.com → New project</a> with the Google account you want to upload to.</p>
+            <p>Then click <b>Untitled project</b> (top left) and name it <b>Meet Recorder Drive Upload</b> <button type="button" class="btn" id="copy-name">Copy name</button></p>
+            <button type="button" class="btn next">Done, next →</button>
+          </div>
+        </details>
+        <details class="step">
+          <summary><span class="n">2</span>Paste the code</summary>
+          <div class="body">
+            <p>Click <b>Copy</b>, select everything in the editor (<b>Ctrl+A</b>), paste (<b>Ctrl+V</b>) and save (<b>Ctrl+S</b>).</p>
+            <div class="code"><textarea id="script-code" readonly></textarea><button type="button" class="btn" id="copy-code">Copy</button></div>
+            <button type="button" class="btn next">Done, next →</button>
+          </div>
+        </details>
+        <details class="step">
+          <summary><span class="n">3</span>Give it permission</summary>
+          <div class="body">
+            <p>In the top bar choose <b>authorize</b> in the function list and click <b>▶ Run</b>.</p>
+            <p>Click <b>Review permissions</b> → your account → <b>Advanced</b> → <b>Go to Meet Recorder Drive Upload (unsafe)</b> → <b>Allow</b>.</p>
+            <p class="where">Google shows “unverified” only because it's your own private script.</p>
+            <button type="button" class="btn next">Done, next →</button>
+          </div>
+        </details>
+        <details class="step">
+          <summary><span class="n">4</span>Publish it</summary>
+          <div class="body">
+            <p>Click <b>Deploy → New deployment</b>, then the ⚙ gear next to “Select type” → <b>Web app</b>.</p>
+            <p>Set <b>Execute as: Me</b> and <b>Who has access: Anyone</b> (work account: <b>Anyone within your company</b>), then click <b>Deploy</b>.</p>
+            <p class="where">Changing the code later? Use Deploy → Manage deployments → ✏️ → New version.</p>
+            <button type="button" class="btn next">Done, next →</button>
+          </div>
+        </details>
+        <details class="step">
+          <summary><span class="n">5</span>Paste the link here</summary>
+          <div class="body">
+            <p>Copy the <b>Web app URL</b> (ends with <code>/exec</code>), paste it below and press <b>Connect &amp; test</b>.</p>
+            <input class="input" id="script-url" type="url" placeholder="https://script.google.com/macros/s/…/exec">
+          </div>
+        </details>
+      </div>
+      <div class="dlg-msg" id="connect-msg"></div>
+      <div class="dlg-row">
+        <button type="button" class="btn btn-ghost btn-soft-danger" id="disconnect" hidden>Disconnect</button>
+        <span class="spacer"></span>
+        <button class="btn" value="cancel">Close</button>
+        <button type="button" class="btn btn-primary" id="save-conn">Connect &amp; test</button>
+      </div>
+    </form>
+  </dialog>
+
+
+  <dialog id="dlg-files">
+    <form method="dialog" class="dlg">
+      <h2>Choose your recordings folder (one time)</h2>
+      <div class="sub">This recording was made before one-click upload existed, so Chrome needs your OK to read it.</div>
+      <ol class="steps">
+        <li>Click <b>Choose folder</b>, open <b>Downloads</b> and select the <b>MeetRecordings</b> folder (don't open a file).</li>
+        <li>Click <b>Select folder</b>, then <b>View files</b> / <b>Allow</b>.</li>
+        <li>Done: this and every later upload starts straight away. New recordings never need this.</li>
+      </ol>
+      <div class="dlg-row">
+        <span class="spacer"></span>
+        <button class="btn" value="cancel">Cancel</button>
+        <button class="btn btn-primary" value="folder">Choose folder</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-player" class="player">
+    <div class="dlg">
+      <h2 id="pl-title"></h2>
+      <div class="sub" id="pl-sub"></div>
+      <div class="pl-stage" id="pl-stage">
+        <video id="pl-video" preload="metadata" playsinline></video>
+        <div class="pl-big" id="pl-big" hidden></div>
+        <div class="pl-cap" id="pl-cap" hidden></div>
+        <div class="pl-ctl" id="pl-ctl">
+          <div class="pl-seek" id="pl-seek" title="Seek">
+            <div class="pl-buf" id="pl-buf"></div><div class="pl-fill" id="pl-fill"></div><div class="pl-ticks" id="pl-ticks"></div><div class="pl-knob" id="pl-knob"></div>
+          </div>
+          <div class="pl-row">
+            <button type="button" class="pb" id="pl-play" title="Play / Pause (Space)"></button>
+            <button type="button" class="pb" id="pl-back" title="Back 10 seconds (Left arrow)"></button>
+            <button type="button" class="pb" id="pl-fwd" title="Forward 10 seconds (Right arrow)"></button>
+            <span class="pl-time" id="pl-time">0:00 / 0:00</span>
+            <span class="pl-sp"></span>
+            <button type="button" class="pb" id="pl-mute" title="Mute (M)"></button>
+            <input type="range" id="pl-vol" min="0" max="1" step="0.05" value="1" title="Volume">
+            <button type="button" class="pb txt" id="pl-cc" title="Captions (C)" hidden>CC</button>
+            <button type="button" class="pb txt" id="pl-rate" title="Playback speed">1×</button>
+            <button type="button" class="pb" id="pl-pip" title="Picture in picture"></button>
+            <button type="button" class="pb" id="pl-full" title="Full screen (F)"></button>
+          </div>
+        </div>
+      </div>
+      <div class="pl-marks" id="pl-marks" hidden></div>
+      <div class="dlg-msg err" id="pl-msg"></div>
+      <section class="tr" id="tr">
+        <div class="tr-head">
+          <b>Transcript</b><span class="tr-state" id="tr-state"></span><span class="spacer"></span>
+          <button type="button" class="btn" id="tr-copy" hidden>Copy</button>
+          <button type="button" class="btn" id="tr-vtt" hidden>.vtt</button>
+          <button type="button" class="btn" id="tr-del" hidden>Delete</button>
+          <button type="button" class="btn btn-primary" id="tr-gen">Generate transcript</button>
+        </div>
+        <div class="tr-bar" id="tr-bar" hidden><i id="tr-fill"></i></div>
+        <div class="tr-list" id="tr-list" hidden></div>
+      </section>
+      <div class="dlg-row">
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="pl-sys">Open in system player</button>
+        <button type="button" class="btn btn-primary" id="pl-close">Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-upload">
+    <form method="dialog" class="dlg">
+      <h2>Upload to Google Drive</h2>
+      <div class="sub" id="up-file"></div>
+      <div>
+        <label class="field-label" for="up-folder">Folder name</label>
+        <input class="input" id="up-folder" type="text" required>
+        <div class="where" style="margin-top:6px">Saved in <b>My Drive → Meet Recordings → <span id="up-where"></span></b> (created if it doesn't exist)</div>
+      </div>
+      <div class="dlg-row">
+        <button class="btn" value="cancel" formnovalidate>Cancel</button>
+        <button class="btn btn-primary" value="ok">Upload</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="settings-lib.js"></script><script src="drive.js"></script>
+  <script src="webm-fix.js"></script>
+  <script src="library.js"></script>
+</body>
+</html>

@@ -1,0 +1,151 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    body { width: 348px; }
+    .head {
+      display: flex; align-items: center; gap: 11px;
+      padding: 16px 16px 14px;
+      background: linear-gradient(135deg, var(--primary), var(--primary-2));
+      color: #fff;
+    }
+    .logo { width: 38px; height: 38px; border-radius: 11px; background: rgba(255,255,255,.2); display: grid; place-items: center; }
+    .logo img { width: 100%; height: 100%; border-radius: inherit; display: block; }
+    .logo svg { width: 22px; height: 22px; }
+    .head h1 { margin: 0; font-size: 16px; line-height: 1.2; }
+    .head p { margin: 1px 0 0; font-size: 12px; opacity: .85; }
+    .status {
+      margin-left: auto; display: flex; align-items: center; gap: 7px;
+      padding: 5px 11px; border-radius: 999px;
+      background: rgba(255,255,255,.2); font-size: 12.5px; font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .status .dot { background: #fff; }
+    .status .dot.live { background: #ff5a5a; }
+    .body { padding: 16px; display: grid; gap: 16px; }
+    .row-card {
+      padding: 12px 13px; border: 1.5px solid var(--border); border-radius: 12px; background: var(--surface);
+    }
+    .row-card .t { font-weight: 700; font-size: 13px; }
+    /* Custom slider: same look at rest, hover and drag (no native colour change) */
+    #quality { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; margin: 6px 0 0; background: transparent; cursor: pointer; outline: none; }
+    #quality::-webkit-slider-runnable-track { height: 6px; border-radius: 6px; background: linear-gradient(var(--primary), var(--primary)) 0 0 / var(--fill, 66%) 100% no-repeat, var(--border); }
+    #quality::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -6px; border-radius: 50%; background: var(--primary); border: 3px solid var(--surface); box-shadow: 0 0 0 1.5px var(--primary); }
+    #quality:disabled { opacity: .5; cursor: default; }
+    .qlabels { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+    .row-card .d { color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+    #mic-perm { margin-top: 9px; width: 100%; }
+    .actions { display: grid; gap: 8px; }
+    #msg { min-height: 18px; text-align: center; font-size: 12.5px; color: var(--muted); }
+    #msg.err { color: var(--danger); font-weight: 600; }
+
+    /* Live sound wave: bars bounce while sound is heard, height follows the volume */
+    #diag-lines { display: grid; gap: 2px; margin-top: 6px; }
+    .st { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 5px 0; }
+    .st + .st { border-top: 1px solid var(--border); }
+    .st .sd { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; opacity: .6; }
+    .st.ok .sd { background: var(--success); opacity: 1; }
+    .st.bad .sd { background: var(--danger); opacity: 1; }
+    .st .sl { font-weight: 600; }
+    .st .sv { margin-left: auto; color: var(--muted); }
+    .st.ok .sv { color: var(--success); font-weight: 600; }
+    .st.bad .sv { color: var(--danger); font-weight: 600; }
+    .st .wave { margin-left: 0; }
+    .sh { font-size: 11.5px; color: var(--muted); padding: 0 0 4px 16px; }
+    .wave { display: inline-flex; align-items: center; gap: 2.5px; height: 16px; margin-left: 7px; vertical-align: middle; }
+    .wave i {
+      width: 3px; height: 16px; border-radius: 3px;
+      background: rgba(128,128,128,.4);
+      transform: scaleY(.2); transform-origin: center;
+    }
+    .wave.on i {
+      background: linear-gradient(180deg, #34d27b, var(--success));
+      animation: wave 1s ease-in-out infinite;
+    }
+    .wave.lv-1 { --amp: .45; }
+    .wave.lv-2 { --amp: .75; }
+    .wave.lv-3 { --amp: 1; }
+    .wave i:nth-child(1) { --k: .55; animation-delay: -.9s; }
+    .wave i:nth-child(2) { --k: .85; animation-delay: -.3s; }
+    .wave i:nth-child(3) { --k: 1;   animation-delay: -.6s; }
+    .wave i:nth-child(4) { --k: .75; animation-delay: -.15s; }
+    .wave i:nth-child(5) { --k: .5;  animation-delay: -.45s; }
+    @keyframes wave {
+      0%, 100% { transform: scaleY(.2); }
+      50% { transform: scaleY(calc(.2 + .8 * var(--amp) * var(--k))); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .wave.on i { animation: none; transform: scaleY(calc(.2 + .8 * var(--amp) * var(--k))); }
+    }
+  </style>
+</head>
+<body>
+  <div class="head">
+    <div class="logo">
+      <img src="icons/icon128.png" alt="">
+    </div>
+    <div>
+      <h1>Meet Recorder</h1>
+      <p>Record, save, upload</p>
+    </div>
+    <div class="status" id="pill"><span class="dot" id="pill-dot"></span><span id="pill-text">Ready</span></div>
+  </div>
+
+  <div class="body">
+    <div>
+      <label class="field-label" for="name">Meeting name</label>
+      <input class="input" id="name" type="text" placeholder="e.g. Weekly sync">
+    </div>
+
+    <div class="row-card">
+      <div class="t">Video quality</div>
+      <div class="d" id="qDesc"></div>
+      <input type="range" id="quality" min="0" max="5" step="1" value="2">
+      <div class="qlabels"><span>Low</span><span>Medium</span><span>Good</span><span>High</span><span>Ultra</span><span>4K</span></div>
+    </div>
+
+    <div class="row-card">
+      <label class="switch">
+        <span>
+          <div class="t">My microphone</div>
+          <div class="d">Record my voice too</div>
+        </span>
+        <input type="checkbox" id="useMic" checked>
+        <span class="track"></span>
+      </label>
+      <select id="micId" style="width:100%;margin-top:8px;padding:8px;border-radius:8px;background:var(--surface-2, #1c1f2e);color:inherit;border:1px solid var(--border, #333)"></select>
+      <button class="btn" id="mic-perm" hidden>Allow microphone access</button>
+    </div>
+
+    <div id="upload-status" class="d" hidden style="line-height:1.6;margin:0 2px 10px"></div>
+
+    <div class="row-card" id="diag" hidden>
+      <div class="t">Live status</div>
+      <div id="diag-lines"></div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary btn-lg" id="start">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="6"/></svg>
+        Start recording
+      </button>
+      <button class="btn btn-danger btn-lg" id="stop" hidden>
+        <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+        Stop &amp; save
+      </button>
+      <button class="btn btn-lg" id="mark" hidden title="Alt+Shift+B">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+        <span>Add bookmark</span>
+      </button>
+      <button class="btn btn-lg" id="library">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        My recordings &amp; Drive upload
+      </button>
+    </div>
+    <div id="msg"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

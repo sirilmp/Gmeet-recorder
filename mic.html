@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Microphone access</title>
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    body { display: grid; place-items: center; min-height: 100vh; }
+    .box { max-width: 420px; text-align: center; padding: 32px; background: var(--surface); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); }
+    .ic { width: 56px; height: 56px; margin: 0 auto 14px; border-radius: 16px; background: linear-gradient(135deg, var(--primary), var(--primary-2)); color: #fff; display: grid; place-items: center; }
+    .ic svg { width: 28px; height: 28px; }
+    h2 { margin: 0 0 8px; }
+    p { color: var(--muted); margin: 0; }
+  </style></head>
+<body>
+  <div class="box">
+    <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></div>
+    <h2>Microphone access</h2>
+    <p id="msg">Click <b>Allow</b> in the browser prompt so your voice can be recorded.</p>
+  </div>
+  <script src="mic.js"></script>
+</body></html>

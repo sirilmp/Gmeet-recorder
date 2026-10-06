@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 
 const ICON = {
+  text: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 10.5h16M4 15h10M4 19.5h7"/></svg>',
   bookmark: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 3h12v18l-6-4-6 4z"/></svg>',
   video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="15" height="14" rx="2"/><path d="M18 10l4-2v8l-4-2"/></svg>',
   cal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
@@ -662,6 +663,11 @@ async function buildCard(rec) {
   trChip.dataset.tr = rec.startedAt;
   trChip.hidden = true;
   name.append(trChip);
+  const trDone = el("span", "chip ok", "Transcript");
+  trDone.dataset.trdone = rec.startedAt;
+  trDone.title = "Transcript ready, open the recording to read it";
+  trDone.hidden = true;
+  name.append(trDone);
   if (rec.imported && rec.imported.trStatus === "in-progress") {
     const chip = el("span", "chip warn", "Transcript pending");
     chip.title = `The sender's transcript was ${rec.imported.trPct || 0}% done when you imported this. Open it to check Drive for the finished one.`;
@@ -696,6 +702,12 @@ async function buildCard(rec) {
     const ob = btn(ICON.play, "", "btn-primary", () => playRecording(rec, item, 0));
     ob.title = "Play recording";
     actions.append(ob);
+    // Only while there is no transcript yet and none is being made (paintTrChips keeps this in sync)
+    const tb = btn(ICON.text, "Transcribe", "", () => transcribeFromCard(rec, item, tb));
+    tb.title = "Make a transcript";
+    tb.dataset.trbtn = rec.startedAt;
+    tb.hidden = true;
+    actions.append(tb);
     const bar = el("progress");
     bar.max = 100;
     bar.dataset.up = rec.downloadId;
@@ -1299,6 +1311,33 @@ async function loadTranscript(rec) {
   }
 }
 
+// Put a recording in the background transcript queue, next after the one running now.
+// Older recordings have no copy inside the extension: give the background one to read.
+async function queueTranscript(rec, getBlob) {
+  if (!(await keptFile(rec))) {
+    const blob = await getBlob();
+    if (!blob) throw new Error("The video file was not found.");
+    const root = await navigator.storage.getDirectory();
+    const h = await root.getFileHandle(`trsrc-${rec.startedAt}.${extOf(rec)}`, { create: true });
+    await blob.stream().pipeTo(await h.createWritable());
+  }
+  await bgSend({ type: "tr-add", id: rec.startedAt, ext: extOf(rec), front: true });
+}
+
+// The transcript button on a card: same as Generate in the player, without opening it
+async function transcribeFromCard(rec, item, b) {
+  b.disabled = true;
+  try {
+    await queueTranscript(rec, () => readLocalFile(rec, item));
+    toast(`Making a transcript of "${rec.name}" in the background`);
+  } catch (e) {
+    if (e.name !== "AbortError") toast(`Could not start the transcript: ${e.message}`, true);
+  } finally {
+    b.disabled = false;
+    paintTrChips();
+  }
+}
+
 // Start (or cancel) a transcript of the open recording
 $("tr-gen").onclick = async () => {
   const rec = playerRec;
@@ -1311,15 +1350,8 @@ $("tr-gen").onclick = async () => {
       await bgSend({ type: "tr-cancel", id: rec.startedAt });
       return;
     }
-    // Older recordings have no copy inside the extension: give the background one to read
-    if (!(await keptFile(rec))) {
-      if (!playerBlob) return;
-      $("tr-state").textContent = "Preparing…";
-      const root = await navigator.storage.getDirectory();
-      const h = await root.getFileHandle(`trsrc-${rec.startedAt}.${extOf(rec)}`, { create: true });
-      await playerBlob.stream().pipeTo(await h.createWritable());
-    }
-    await bgSend({ type: "tr-add", id: rec.startedAt, ext: extOf(rec), front: true });
+    if (!(await keptFile(rec))) $("tr-state").textContent = "Preparing…";
+    await queueTranscript(rec, () => playerBlob);
   } catch (e) {
     $("tr-state").textContent = "Couldn't start: " + e.message;
   } finally {
@@ -1335,20 +1367,31 @@ chrome.storage.onChanged.addListener((changes, area) => {
     const id = playerRec.startedAt;
     if (changes.trQueue || changes.trState || changes["tr-" + id] || changes["trp-" + id]) loadTranscript(playerRec);
   }
-  if (changes.trQueue || changes.trState) paintTrChips();
+  if (changes.trQueue || changes.trState || Object.keys(changes).some((k) => /^trp?-\d+$/.test(k))) paintTrChips();
 });
 
-// "Transcribing 40%" / "Transcript queued" on the cards
+// On the cards: "Transcribing 40%" / "Transcript queued" while it's being made, the Transcript badge once
+// it's done, and the transcript button only when there is neither (also after a failed try)
 async function paintTrChips() {
-  const { trQueue = [], trState } = await chrome.storage.local.get(["trQueue", "trState"]);
-  for (const c of document.querySelectorAll("[data-tr]")) {
-    const id = +c.dataset.tr;
+  const ids = [...new Set([...document.querySelectorAll("[data-tr]")].map((c) => +c.dataset.tr))];
+  const got = await chrome.storage.local.get(["trQueue", "trState", ...ids.flatMap((id) => ["tr-" + id, "trp-" + id])]);
+  const { trQueue = [], trState } = got;
+  for (const id of ids) {
     const at = trQueue.findIndex((x) => x.id === id);
-    c.hidden = at < 0;
-    if (at < 0) continue;
-    if (trState && trState.id === id)
-      c.textContent = trState.phase === "paused" ? "Transcript paused" : trState.phase === "transcribing" ? `Transcribing ${trState.pct}%` : "Transcribing…";
-    else c.textContent = "Transcript queued";
+    const done = !!got["tr-" + id];
+    const failed = !!(got["trp-" + id] && got["trp-" + id].error);
+    for (const c of document.querySelectorAll(`[data-tr="${id}"]`)) {
+      c.hidden = at < 0;
+      if (at < 0) continue;
+      if (trState && trState.id === id)
+        c.textContent = trState.phase === "paused" ? "Transcript paused" : trState.phase === "transcribing" ? `Transcribing ${trState.pct}%` : "Transcribing…";
+      else c.textContent = "Transcript queued";
+    }
+    for (const c of document.querySelectorAll(`[data-trdone="${id}"]`)) c.hidden = !done || at >= 0;
+    for (const b of document.querySelectorAll(`[data-trbtn="${id}"]`)) {
+      b.hidden = done || at >= 0;
+      b.title = failed ? `Transcript failed: ${got["trp-" + id].error}. Try again` : "Make a transcript";
+    }
   }
 }
 

@@ -1666,6 +1666,12 @@ async function loadTranscript(rec) {
       rec.imported = { ...rec.imported, trStatus: "done" };
       updateRecord(rec.downloadId, { imported: rec.imported }).then(() => render());
     }
+    // made with an early version that took Meet's icon names for people: fix it once
+    const fixed = cleanSpeakers(done.segments, rec.speakers);
+    if (fixed) {
+      done.segments = fixed;
+      saveSpeakers(fixed);
+    }
     renderTranscript(done.segments);
     state(done.segments && done.segments.length ? `${done.segments.length} lines` : "No speech was found.");
     // say why there are no names, so it doesn't look broken

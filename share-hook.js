@@ -109,6 +109,18 @@
     if (recActive) send();
   }
 
+  // Presenting usually means looking at another window, away from the bar on the Meet page, so pop the
+  // bar out (dock.js) while a recording runs. Chrome counts a granted share as a click, which is what
+  // lets the page open that window now.
+  function popOutDock() {
+    try {
+      const doc = window.top.document;
+      if (doc.documentElement.dataset.mrAutopip === "1") doc.dispatchEvent(new CustomEvent("meet-recorder-autopip"));
+    } catch {
+      /* cross-origin frame */
+    }
+  }
+
   // Patch getDisplayMedia in this window and in any iframe Meet creates (it may call it from a
   // fresh iframe, which would otherwise have an unpatched copy)
   function patch(win) {
@@ -123,6 +135,7 @@
         } catch (e) {
           console.warn("[Meet Recorder] share hook failed", e);
         }
+        popOutDock();
         return stream;
       };
       // Also watch getUserMedia: tells us which mic Meet picked (or switched to)

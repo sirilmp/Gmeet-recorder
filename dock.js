@@ -150,6 +150,19 @@
     const res = await send({ type: "bookmark" });
     note(res && res.ok ? "Bookmark added ★" : "Not recording", !!(res && res.ok));
   };
+  // Alt+Shift+B on the Meet page. Chrome sends the same key to the extension as a shortcut only when it
+  // assigned it (it can be unset in chrome://extensions/shortcuts, or taken by Chrome's "focus bookmarks bar")
+  addEventListener(
+    "keydown",
+    (e) => {
+      if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey || e.code !== "KeyB" || e.repeat) return;
+      if ($("mark").hidden) return;
+      e.preventDefault();
+      e.stopPropagation();
+      $("mark").click();
+    },
+    true
+  );
   $("hide").onclick = async () => {
     const { settings = {} } = await chrome.storage.local.get("settings");
     await chrome.storage.local.set({ settings: { ...settings, showDock: false } });

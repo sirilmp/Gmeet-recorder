@@ -1041,6 +1041,10 @@ function addMark() {
   }
 }
 $("bm-add").onclick = addMark;
+// Alt+Shift+B when Chrome handles it as the extension's shortcut (only sent when nothing is recording)
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.target === "library" && msg.type === "bookmark" && $("dlg-player").open && document.hasFocus()) addMark();
+});
 
 let paintPlayerTicks = () => {};
 (function wirePlayer() {
@@ -1193,7 +1197,7 @@ let paintPlayerTicks = () => {};
       if (e.target.tagName === "BUTTON") return;
       toggle();
     } else if (k === "m") v.muted = !v.muted;
-    else if (k === "b") addMark();
+    else if (e.code === "KeyB" && !e.ctrlKey && !e.metaKey) addMark(); // B, or Alt+Shift+B like during a meeting
     else if (k === "f") $("pl-full").click();
     else if (k === "c") $("pl-cc").click();
     else if (k === "arrowup") v.volume = Math.min(1, v.volume + 0.1);

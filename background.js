@@ -183,7 +183,11 @@ async function flashBadge(text, color = "#1a73e8") {
 async function addBookmark() {
   const { recording, startedAt, marks = [] } = await chrome.storage.session.get(["recording", "startedAt", "marks"]);
   if (!recording || !startedAt) return false;
-  marks.push(Date.now() - startedAt);
+  const at = Date.now() - startedAt;
+  // The Meet page also catches Alt+Shift+B (for when Chrome didn't assign the shortcut), so one
+  // keypress can arrive twice: keep only one
+  if (marks.length && at - marks[marks.length - 1] < 1500) return true;
+  marks.push(at);
   await chrome.storage.session.set({ marks });
   flashBadge("★" + marks.length);
   return true;
@@ -224,7 +228,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 chrome.commands.onCommand.addListener(async (command) => {
   const { recording } = await chrome.storage.session.get("recording");
   try {
-    if (command === "add-bookmark") await addBookmark();
+    if (command === "add-bookmark") {
+      // Not recording: the shortcut bookmarks the open player in the library instead
+      if (!(await addBookmark())) chrome.runtime.sendMessage({ target: "library", type: "bookmark" }).catch(() => {});
+    }
     else if (command === "toggle-recording") {
       if (recording) {
         await stop();

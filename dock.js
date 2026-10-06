@@ -8,8 +8,7 @@
   host.id = "meet-recorder-dock";
   host.style.cssText = "position:fixed;z-index:2147483646;left:0;top:0;";
   const root = host.attachShadow({ mode: "closed" });
-  root.innerHTML = `
-    <style>
+  const CSS = `
       :host { all: initial; }
       .bar { display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 12px;
         background: rgba(28,28,27,.92); color: #ececea; font: 550 13px/1 "MR Inter", Inter, ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
@@ -49,13 +48,22 @@
       .ask .row button:not(.rec) { color: #a3a39e; } .ask .row button:not(.rec):hover { color: #fff; }
       .ask .row button.rec { background: #ececea; color: #1a1a19; } .ask .row button.rec:hover { background: #fff; }
       [hidden] { display: none !important; }
-    </style>
+      /* Popped out into its own always-on-top window: the bar fills it, the window's own frame moves and closes it */
+      body.pip { margin: 0; height: 100vh; background: #1c1c1b; display: flex; flex-direction: column; align-items: center;
+        justify-content: center; gap: 6px; overflow: hidden; }
+      .pip .bar { background: none; box-shadow: none; backdrop-filter: none; }
+      .pip .grip, .pip .div, .pip #hide { display: none; }
+      .pip .note { position: static; margin: 0 8px; box-shadow: none; background: rgba(255,255,255,.06); }
+`;
+  root.innerHTML = `
+    <style>${CSS}</style>
     <div class="bar" id="bar">
       <div class="grip" id="grip" title="Drag to move"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></svg></div>
       <button id="start" class="rec" title="Start recording this meeting"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>Record</button>
       <span id="live" class="live" hidden><span class="dot"></span><span class="time" id="time">0:00</span></span>
       <button id="mark" class="icon" title="Add a bookmark here" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button>
       <button id="stop" title="Stop and save" hidden><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Stop</button>
+      <button id="pip" class="icon" title="Pop out: keep this bar on top of every tab and window" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="6" height="5" rx="1" fill="currentColor"/></svg></button>
       <span class="div"></span><button id="hide" class="icon" title="Close for this meeting (turn it off for good in Settings)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
     <div class="note" id="note" hidden></div>
@@ -66,13 +74,21 @@
     </div>`;
   // The extension's fonts, under names of our own so Meet's styles are untouched. Loaded from bytes, since
   // Meet's page rules may not allow font files from the extension; until they arrive the fallbacks show.
+  const fonts = [];
   for (const [family, file] of [["MR Inter", "inter"], ["MR Jakarta", "plus-jakarta-sans"], ["MR Mono", "jetbrains-mono"]])
     fetch(chrome.runtime.getURL(`fonts/${file}-latin-wght-normal.woff2`))
       .then((r) => r.arrayBuffer())
       .then((buf) => new FontFace(family, buf, { weight: "100 900" }).load())
-      .then((f) => document.fonts.add(f))
+      .then((f) => {
+        fonts.push(f);
+        document.fonts.add(f);
+        if (pipWin) pipWin.document.fonts.add(f);
+      })
       .catch(() => {});
-  const $ = (id) => root.getElementById(id);
+  // Looked up once: the bar and its note move into the pop-out window and back, out of this shadow root
+  const els = {};
+  for (const el of root.querySelectorAll("[id]")) els[el.id] = el;
+  const $ = (id) => els[id];
 
   const send = (msg) => chrome.runtime.sendMessage({ target: "background", ...msg }).catch(() => null);
   let noteTimer;
@@ -115,6 +131,7 @@
 
   // ---- state ----
   let timer;
+  let wasRec = false;
   const fmt = (ms) => {
     const s = Math.floor(ms / 1000);
     const p = (n) => String(n).padStart(2, "0");
@@ -127,6 +144,8 @@
     } catch {}
     const rec = !!st.recording;
     if (!rec && feed && feed.live) stopFeed(); // the recording ended: stop sharing the tab
+    if (!rec && wasRec && pipAuto) closePip();
+    wasRec = rec;
     if (rec) hideAsk();
     $("start").hidden = rec;
     $("live").hidden = !rec;
@@ -227,14 +246,65 @@
     }
   });
 
+  // ---- pop-out window ----
+  // Chrome's Document Picture-in-Picture: a small always-on-top window that stays over every tab and app,
+  // so Bookmark and Stop are at hand after I switch away from Meet. The bar itself moves into the window
+  // (its buttons keep working as they are) and comes back to the page when the window closes.
+  // Chrome opens it only straight after a click on the page, and only one such window at a time.
+  const canPip = "documentPictureInPicture" in window;
+  let pipWin = null;
+  let pipAuto = false; // opened by Record, so it closes again when that recording ends
+  async function openPip(auto) {
+    if (!canPip || pipWin) return pipWin;
+    let w;
+    try {
+      w = await documentPictureInPicture.requestWindow({ width: 300, height: 96 });
+    } catch (e) {
+      if (!auto) note("Couldn't pop out the bar: click the pop-out button again.", false);
+      return null;
+    }
+    pipWin = w;
+    pipAuto = auto;
+    const doc = w.document;
+    doc.title = "Meet Recorder";
+    const style = doc.createElement("style");
+    style.textContent = CSS;
+    doc.head.append(style);
+    doc.body.className = "pip";
+    for (const f of fonts) doc.fonts.add(f);
+    doc.body.append($("bar"), $("note"));
+    $("pip").title = "Put this bar back on the Meet page";
+    w.addEventListener("keydown", markKey, true);
+    w.addEventListener("pagehide", () => {
+      if (pipWin !== w) return;
+      pipWin = null;
+      root.append($("bar"), $("note"));
+      $("pip").title = "Pop out: keep this bar on top of every tab and window";
+      applyVisibility();
+    });
+    return w;
+  }
+  const closePip = () => pipWin && pipWin.close();
+  $("pip").hidden = !canPip;
+  $("pip").onclick = () => (pipWin ? closePip() : openPip(false));
+
   $("start").onclick = async () => {
     $("start").disabled = true;
+    let popped = false;
     try {
+      // Pop out now, while Chrome still counts the click; Meet's own pop-out (if it has one open) is left alone
+      if (canPip && !pipWin && !documentPictureInPicture.window) {
+        const { settings = {} } = await chrome.storage.local.get("settings");
+        if (settings.dockPip !== false) popped = !!(await openPip(true));
+      }
       // Starts with the popup's saved choices
       const res = await send({ type: "dock-start" });
       if (res && res.ok) return;
       const err = res && res.needShare ? await shareTab() : (res && res.error) || "Couldn't start the recording.";
-      if (err) note(err, false);
+      if (err) {
+        if (popped) closePip();
+        note(err, false);
+      }
     } finally {
       $("start").disabled = false;
     }
@@ -251,17 +321,14 @@
   };
   // Alt+Shift+B on the Meet page. Chrome sends the same key to the extension as a shortcut only when it
   // assigned it (it can be unset in chrome://extensions/shortcuts, or taken by Chrome's "focus bookmarks bar")
-  addEventListener(
-    "keydown",
-    (e) => {
-      if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey || e.code !== "KeyB" || e.repeat) return;
-      if ($("mark").hidden) return;
-      e.preventDefault();
-      e.stopPropagation();
-      $("mark").click();
-    },
-    true
-  );
+  function markKey(e) {
+    if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey || e.code !== "KeyB" || e.repeat) return;
+    if ($("mark").hidden) return;
+    e.preventDefault();
+    e.stopPropagation();
+    $("mark").click();
+  }
+  addEventListener("keydown", markKey, true);
   // Closing the bar hides it for this meeting only; it comes back next meeting. Settings turns it off for good.
   let closedFor = null;
   $("hide").onclick = () => {
@@ -320,6 +387,7 @@
     const show = settings.showDock !== false && !closedFor;
     if (!host.isConnected) document.documentElement.append(host);
     $("bar").hidden = !show;
+    if (!show) closePip();
     if (settings.autoRecord === "off") hideAsk();
     sync();
   }

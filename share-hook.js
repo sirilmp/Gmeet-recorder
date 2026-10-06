@@ -15,6 +15,46 @@
   function reportMic() {
     if (recActive && micTrack && micTrack.label) post({ kind: "meet-mic", label: micTrack.label });
   }
+  // The speaker Meet plays the call to (Meet's "Speakers" setting). Capturing the tab mutes Meet,
+  // and the recorder plays the sound again; it has to use the same device. With a Bluetooth headset
+  // on Windows that matters a lot: once the headset's mic is in use, only its "Hands-Free" output
+  // carries sound, so playing to the system default ("Headphones") gives silence or stutter.
+  let speakerId = null; // last sinkId Meet set; null = not seen yet
+  let reportedSpeaker;
+  async function reportSpeaker() {
+    if (!recActive || window !== window.top) return;
+    let id = speakerId;
+    if (id == null) {
+      const el = [...document.querySelectorAll("audio, video")].find((e) => typeof e.sinkId === "string" && e.sinkId);
+      id = el ? el.sinkId : "";
+    }
+    let label = "";
+    if (id && id !== "default") {
+      try {
+        const d = (await navigator.mediaDevices.enumerateDevices()).find((x) => x.kind === "audiooutput" && x.deviceId === id);
+        label = d ? d.label : "";
+      } catch {
+        /* keep default */
+      }
+    }
+    if (label === reportedSpeaker) return;
+    reportedSpeaker = label;
+    post({ kind: "meet-speaker", label });
+  }
+  for (const proto of [window.HTMLMediaElement && HTMLMediaElement.prototype, window.AudioContext && AudioContext.prototype]) {
+    const original = proto && proto.setSinkId;
+    if (!original) continue;
+    proto.setSinkId = function (id, ...rest) {
+      const r = original.call(this, id, ...rest);
+      if (typeof id === "string") {
+        speakerId = id;
+        Promise.resolve(r).then(reportSpeaker, () => {});
+      }
+      return r;
+    };
+  }
+  navigator.mediaDevices?.addEventListener?.("devicechange", () => reportSpeaker());
+
   function onUserMedia(stream) {
     const t = stream.getAudioTracks()[0];
     if (!t || window !== window.top) return;
@@ -129,6 +169,8 @@
         recActive = true;
         if (window === window.top) post({ kind: "hook-ready" });
         reportMic(); // the mic Meet already had open before the recording started
+        reportedSpeaker = undefined;
+        reportSpeaker(); // and the speaker it already plays to
         if (track) send(); // already presenting when the recording started
       } else if (m.kind === "rec-stop") {
         recActive = false;

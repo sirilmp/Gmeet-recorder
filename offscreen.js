@@ -361,7 +361,16 @@ async function startRecording(streamId, desktopStreamId, useMic, desktopAudio, m
     tabStream.getVideoTracks()[0].addEventListener("ended", stopRecording);
   }
 
-  audioCtx = new AudioContext();
+  // "playback" asks for a larger output buffer than the default (lowest-latency) one. The meeting
+  // sound is played from this hidden page, and with tiny buffers any scheduling hiccup (common with
+  // Bluetooth headsets and when the CPU idles down) is an underrun: stuttering, robotic voices.
+  // A fixed 48 kHz keeps the recording's rate stable even if a headset switches to its low-rate
+  // call mode (16 kHz) mid-recording.
+  try {
+    audioCtx = new AudioContext({ latencyHint: "playback", sampleRate: 48000 });
+  } catch {
+    audioCtx = new AudioContext({ latencyHint: "playback" });
+  }
   // A hidden page can start with a suspended audio engine, which records silence
   await audioCtx.resume().catch(() => {});
   diag({ audio: audioCtx.state });

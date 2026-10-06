@@ -183,7 +183,11 @@ const MeetEngine = {
 
     let audioLoop = Promise.resolve();
     if (audioTrack) {
-      aReader = new MediaStreamTrackProcessor({ track: audioTrack }).readable.getReader();
+      // Audio is read on this page's main thread, which also draws and encodes the video. The default
+      // queue only holds ~100 ms of sound, so any longer stall (a big frame, a slow CPU that clocked down
+      // because nobody is touching the mouse) silently drops audio and the recording sounds robotic.
+      // Keep a few seconds of headroom instead; audio chunks are tiny.
+      aReader = new MediaStreamTrackProcessor({ track: audioTrack, maxBufferSize: 300 }).readable.getReader();
       audioLoop = (async () => {
         try {
           while (!stopping) {

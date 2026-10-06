@@ -642,7 +642,8 @@ async function openDriveMenu(anchor, rec) {
   m.style.left = Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8)) + "px";
 }
 
-async function buildCard(rec) {
+// found: the search match ({ terms, hits }) when the list is filtered
+async function buildCard(rec, found) {
   const [item] = await search({ id: rec.downloadId });
   const exists = item && item.exists && item.state === "complete";
   const saving = item && item.state === "in_progress";
@@ -651,7 +652,7 @@ async function buildCard(rec) {
   card.append(el("div", "thumb", ICON.video));
 
   const info = el("div", "info");
-  const name = el("div", "name", `<span>${esc(rec.name)}</span>`);
+  const name = el("div", "name", `<span>${found ? hl(rec.name, termsRe(found.terms)) : esc(rec.name)}</span>`);
   name.append(el("span", "chip tab", rec.mode === "screen" ? "Screen" : "Meet tab"));
   if (rec.imported) {
     const chip = el("span", "chip tab", "Shared");
@@ -688,13 +689,15 @@ async function buildCard(rec) {
   if (rec.bookmarks && rec.bookmarks.length) {
     const marks = el("div", "marks");
     for (const { ms, note } of marksOf(rec)) {
-      const m = el("button", "mark", `${ICON.bookmark}${fmtDuration(ms)}${note ? `<span class="mn">${esc(note)}</span>` : ""}`);
+      const shown = found && note ? hl(note, termsRe(found.terms)) : esc(note);
+      const m = el("button", "mark", `${ICON.bookmark}${fmtDuration(ms)}${note ? `<span class="mn">${shown}</span>` : ""}`);
       m.title = note ? `${note}\nPlay from here` : "Play from here";
       m.onclick = () => playRecording(rec, item, ms / 1000);
       marks.append(m);
     }
     info.append(marks);
   }
+  if (found && found.hits.length) info.append(hitsBlock(rec, item, found, found.terms));
   card.append(info);
 
   const actions = el("div", "actions");
@@ -740,14 +743,91 @@ async function buildCard(rec) {
   return card;
 }
 
+// ---------- search: titles, bookmark notes and transcripts ----------
+// Transcripts are read from storage once, on the first search, then kept in step through
+// storage.onChanged (a finished, imported or deleted tr-<id>), so typing never re-reads them.
+const trIndex = new Map(); // startedAt -> [{ s, t, l }] (l: lowercased text)
+let trIndexLoad = null;
+function indexTranscript(id, tr) {
+  if (tr && tr.segments && tr.segments.length) trIndex.set(id, tr.segments.map((x) => ({ s: x.s, t: x.t, l: (x.t || "").toLowerCase() })));
+  else trIndex.delete(id);
+}
+function loadTrIndex(records) {
+  if (!trIndexLoad)
+    trIndexLoad = chrome.storage.local.get(records.map((r) => "tr-" + r.startedAt)).then((got) => {
+      for (const [k, v] of Object.entries(got)) indexTranscript(+k.slice(3), v);
+    });
+  return trIndexLoad;
+}
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !trIndexLoad) return;
+  let hit = false;
+  for (const [k, c] of Object.entries(changes)) {
+    if (!/^tr-\d+$/.test(k)) continue;
+    indexTranscript(+k.slice(3), c.newValue);
+    hit = true;
+  }
+  if (hit && searchTerms().length) render();
+});
+
+const searchTerms = () => $("search").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+const termsRe = (terms) => new RegExp(`(${terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "gi");
+// text with the search words wrapped in <mark>, escaped for innerHTML
+function hl(text, re) {
+  return String(text)
+    .split(re)
+    .map((part, i) => (i % 2 ? `<mark>${esc(part)}</mark>` : esc(part)))
+    .join("");
+}
+
+// Every word has to be somewhere in the recording (title, a note or the transcript). Returns null when
+// it isn't, else the transcript lines to show: the ones with all the words if any, else the ones with most.
+function matchRecording(rec, terms) {
+  const lines = trIndex.get(rec.startedAt) || [];
+  const head = (rec.name + "\n" + marksOf(rec).map((m) => m.note).join("\n")).toLowerCase();
+  const counts = lines.map((ln) => terms.reduce((n, t) => n + ln.l.includes(t), 0));
+  for (const t of terms) if (!head.includes(t) && !lines.some((ln) => ln.l.includes(t))) return null;
+  const best = Math.max(0, ...counts);
+  const hits = best ? lines.filter((_, i) => counts[i] === best) : [];
+  return { hits, all: best === terms.length };
+}
+
+const HITS_SHOWN = 3;
+function hitsBlock(rec, item, m, terms) {
+  const box = el("div", "hits");
+  const re = termsRe(terms);
+  for (const ln of m.hits.slice(0, HITS_SHOWN)) {
+    const b = el("button", "hit", `<b>${stamp(ln.s)}</b><span>${hl(ln.t, re)}</span>`);
+    b.type = "button";
+    b.title = "Play from here";
+    b.onclick = () => playRecording(rec, item, ln.s, { terms, at: ln.s });
+    box.append(b);
+  }
+  if (m.hits.length > HITS_SHOWN) {
+    const more = el("button", "hit-more", `${m.hits.length - HITS_SHOWN} more in the transcript`);
+    more.type = "button";
+    more.onclick = () => playRecording(rec, item, m.hits[0].s, { terms, at: m.hits[0].s });
+    box.append(more);
+  }
+  return box;
+}
+
 // Several renders can overlap (download events fire in bursts): only the newest one may draw,
 // and it swaps the whole list in one go, so cards are never added twice.
 let renderSeq = 0;
 async function render() {
   const seq = ++renderSeq;
   const all = (await getRecords()).sort((a, b) => b.startedAt - a.startedAt);
-  const q = $("search").value.trim().toLowerCase();
-  const records = q ? all.filter((r) => r.name.toLowerCase().includes(q)) : all;
+  const terms = searchTerms();
+  const q = terms.length > 0;
+  if (q) await loadTrIndex(all);
+  if (seq !== renderSeq) return;
+  const matches = new Map();
+  if (q) for (const r of all) {
+    const m = matchRecording(r, terms);
+    if (m) matches.set(r, m);
+  }
+  const records = q ? all.filter((r) => matches.has(r)) : all;
 
   // Group by calendar day (newest first)
   const groups = new Map();
@@ -773,7 +853,7 @@ async function render() {
     );
     day.append(summary);
     const body = el("div", "day-body");
-    for (const rec of recs) body.append(await buildCard(rec));
+    for (const rec of recs) body.append(await buildCard(rec, q ? { terms, ...matches.get(rec) } : null));
     if (seq !== renderSeq) return; // a newer render started
     day.append(body);
     day.ontoggle = () => {
@@ -788,6 +868,7 @@ async function render() {
   $("stat-count").textContent = all.length;
   $("stat-size").textContent = fmtSize(all.reduce((n, r) => n + (r.size || 0), 0));
   $("empty").hidden = all.length > 0;
+  $("no-hits").hidden = !all.length || !q || records.length > 0;
   $("list").replaceChildren(frag);
   paintTrChips();
   for (const id of uploading.keys()) showProgress(id);
@@ -943,6 +1024,7 @@ function closePlayer() {
   playerUrl = null;
   playerRec = null;
   playerBlob = null;
+  trFind = null;
   $("pl-cap").hidden = true;
   if ($("dlg-player").open) $("dlg-player").close();
 }
@@ -1228,6 +1310,7 @@ let paintPlayerTicks = () => {};
 let trActive = -1;
 let trSegs = [];
 let trCC = true;
+let trFind = null; // { re, at }: the library search that opened the player (words to mark, line to show)
 const trKey = (rec) => "tr-" + rec.startedAt;
 const stamp = (s) => fmtDuration(s * 1000);
 const vttTime = (s) => {
@@ -1255,13 +1338,23 @@ function renderTranscript(segs, busy = false) {
   for (const sg of trSegs) {
     const row = el("div", "tr-line");
     row.dataset.s = sg.s;
-    row.append(el("b", "", stamp(sg.s)), el("span", "", esc(sg.t)));
+    row.append(el("b", "", stamp(sg.s)), el("span", "", trFind ? hl(sg.t, trFind.re) : esc(sg.t)));
     row.onclick = () => {
       const v = $("pl-video");
       v.currentTime = sg.s;
       v.play().catch(() => {});
     };
     list.append(row);
+  }
+  // Opened from a search result: bring that line into view
+  if (trFind && trFind.at != null) {
+    const i = trSegs.findIndex((x) => x.s === trFind.at);
+    if (i >= 0) {
+      const row = list.children[i];
+      row.classList.add("found");
+      requestAnimationFrame(() => (list.scrollTop = row.offsetTop - list.offsetTop - list.clientHeight / 3));
+      trFind.at = null;
+    }
   }
   syncCaption();
 }
@@ -1448,7 +1541,8 @@ function syncCaption() {
 $("pl-video").addEventListener("timeupdate", syncCaption);
 $("pl-video").addEventListener("seeked", syncCaption);
 
-async function playRecording(rec, item, startAt) {
+// find: { terms, at } when opened from a search result
+async function playRecording(rec, item, startAt, find) {
   const dlg = $("dlg-player");
   $("pl-title").textContent = rec.name;
   $("pl-sub").textContent = `${fmtDateTime(rec.startedAt)} · ${fmtDuration(rec.durationMs)}`;
@@ -1459,6 +1553,7 @@ async function playRecording(rec, item, startAt) {
   playerRec = rec;
   v.removeAttribute("src");
   trSegs = [];
+  trFind = find ? { re: termsRe(find.terms), at: find.at } : null;
   loadTranscript(rec);
   renderMarks();
   try {
@@ -1482,7 +1577,11 @@ async function playRecording(rec, item, startAt) {
   }
 }
 
-$("search").oninput = () => render();
+let searchTimer = 0;
+$("search").oninput = () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(render, 120);
+};
 renderDriveBtn();
 checkScript();
 pruneKept().then(showRecover);

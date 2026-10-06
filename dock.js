@@ -56,7 +56,7 @@
       <span id="live" class="live" hidden><span class="dot"></span><span class="time" id="time">0:00</span></span>
       <button id="mark" class="icon" title="Add a bookmark here" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button>
       <button id="stop" title="Stop and save" hidden><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Stop</button>
-      <span class="div"></span><button id="hide" class="icon" title="Hide this bar (turn it back on in Settings)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <span class="div"></span><button id="hide" class="icon" title="Close for this meeting (turn it off for good in Settings)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
     <div class="note" id="note" hidden></div>
     <div class="ask" id="ask" hidden>
@@ -171,9 +171,11 @@
     },
     true
   );
-  $("hide").onclick = async () => {
-    const { settings = {} } = await chrome.storage.local.get("settings");
-    await chrome.storage.local.set({ settings: { ...settings, showDock: false } });
+  // Closing the bar hides it for this meeting only; it comes back next meeting. Settings turns it off for good.
+  let closedFor = null;
+  $("hide").onclick = () => {
+    closedFor = location.pathname;
+    $("bar").hidden = true;
   };
 
   // ---- "Record this meeting?" prompt when I join a call ----
@@ -204,6 +206,7 @@
     await chrome.storage.local.set({ settings: { ...settings, autoRecord: "off" } });
   };
   setInterval(async () => {
+    if (closedFor && closedFor !== location.pathname) applyVisibility(); // moved on to another meeting
     const now = inCall();
     if (now && !wasInCall && !asked.has(location.pathname)) {
       asked.add(location.pathname);
@@ -222,7 +225,8 @@
   // ---- show / hide following the setting ----
   async function applyVisibility() {
     const { settings = {} } = await chrome.storage.local.get("settings");
-    const show = settings.showDock !== false;
+    if (closedFor && closedFor !== location.pathname) closedFor = null;
+    const show = settings.showDock !== false && !closedFor;
     if (!host.isConnected) document.documentElement.append(host);
     $("bar").hidden = !show;
     if (settings.autoRecord === "off") hideAsk();

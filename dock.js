@@ -12,7 +12,7 @@
     <style>
       :host { all: initial; }
       .bar { display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 12px;
-        background: rgba(28,28,27,.92); color: #ececea; font: 550 13px/1 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+        background: rgba(28,28,27,.92); color: #ececea; font: 550 13px/1 "MR Inter", Inter, ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
         box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 8px 28px rgba(0,0,0,.4); user-select: none; backdrop-filter: blur(12px); }
       .grip { width: 18px; height: 30px; display: grid; place-items: center; cursor: grab; opacity: .4; }
       .grip:hover { opacity: .75; }
@@ -30,20 +30,20 @@
       @keyframes p { 50% { opacity: .35; } }
       @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
       .live { display: inline-flex; align-items: center; gap: 7px; padding: 0 8px 0 6px; }
-      .time { font: 500 12.5px/1 ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; min-width: 38px; color: #fff; }
+      .time { font: 500 12.5px/1 "MR Mono", "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; min-width: 38px; color: #fff; }
       .div { width: 1px; height: 16px; background: rgba(255,255,255,.12); margin: 0 2px; }
       .note { position: absolute; top: 100%; left: 0; margin-top: 6px; max-width: 280px; padding: 8px 11px; border-radius: 9px;
-        background: rgba(28,28,27,.95); color: #f5b4b5; font: 500 12px/1.45 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+        background: rgba(28,28,27,.95); color: #f5b4b5; font: 500 12px/1.45 "MR Inter", Inter, ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
         box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 8px 28px rgba(0,0,0,.4); }
       .note.ok { color: #ececea; }
       .ask { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); width: 340px; max-width: calc(100vw - 24px);
         padding: 14px 16px; border-radius: 14px; background: rgba(28,28,27,.97); color: #ececea;
         box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 16px 48px rgba(0,0,0,.5);
-        font: 400 13px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif; }
-      .ask h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; color: #fff; }
+        font: 400 13px/1.5 "MR Inter", Inter, ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif; }
+      .ask h3 { margin: 0 0 4px; font-family: "MR Jakarta", "MR Inter", Inter, ui-sans-serif, system-ui, sans-serif; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; color: #fff; }
       .ask p { margin: 0 0 12px; color: #a3a39e; }
       .ask b { color: #ececea; font-weight: 550; }
-      .ask kbd { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.14); border-radius: 5px; padding: 1px 6px; font: 500 11.5px ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: #fff; white-space: nowrap; }
+      .ask kbd { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.14); border-radius: 5px; padding: 1px 6px; font: 500 11.5px "MR Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: #fff; white-space: nowrap; }
       .ask .row { display: flex; gap: 6px; justify-content: flex-end; }
       .ask .row button { height: 30px; font-size: 12.5px; }
       .ask .row button:not(.rec) { color: #a3a39e; } .ask .row button:not(.rec):hover { color: #fff; }
@@ -64,6 +64,14 @@
       <p id="askHow"></p>
       <div class="row"><button id="askNever">Don't ask again</button><button id="askNo" class="rec">Not now</button></div>
     </div>`;
+  // The extension's fonts, under names of our own so Meet's styles are untouched. Loaded from bytes, since
+  // Meet's page rules may not allow font files from the extension; until they arrive the fallbacks show.
+  for (const [family, file] of [["MR Inter", "inter"], ["MR Jakarta", "plus-jakarta-sans"], ["MR Mono", "jetbrains-mono"]])
+    fetch(chrome.runtime.getURL(`fonts/${file}-latin-wght-normal.woff2`))
+      .then((r) => r.arrayBuffer())
+      .then((buf) => new FontFace(family, buf, { weight: "100 900" }).load())
+      .then((f) => document.fonts.add(f))
+      .catch(() => {});
   const $ = (id) => root.getElementById(id);
 
   const send = (msg) => chrome.runtime.sendMessage({ target: "background", ...msg }).catch(() => null);

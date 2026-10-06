@@ -35,7 +35,8 @@
         "https://meet.google.com/*"
       ],
       "js": [
-        "share-hook.js"
+        "share-hook.js",
+        "autopip-hook.js"
       ],
       "run_at": "document_start",
       "world": "MAIN",

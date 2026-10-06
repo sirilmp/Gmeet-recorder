@@ -102,7 +102,8 @@ async function markUploaded({ startedAt, fileUrl, folderUrl, folderId, packaged,
   }
 }
 
-async function start(tabId, useMic, name, mode, autoUpload, micId, presentScreen, quality) {
+// feed: the Meet page shares its own tab and sends it to the recorder (Record button on the page)
+async function start(tabId, useMic, name, mode, autoUpload, micId, presentScreen, quality, feed = false) {
   const tab = await chrome.tabs.get(tabId);
   if (!tab.url || !tab.url.startsWith("https://meet.google.com/")) {
     throw new Error("Open a Google Meet tab first.");
@@ -129,7 +130,7 @@ async function start(tabId, useMic, name, mode, autoUpload, micId, presentScreen
   }
 
   const startedAt = Date.now();
-  const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+  const streamId = feed ? null : await tabStreamId(tabId);
   await chrome.storage.session.set({ diag: {} });
   await chrome.storage.session.remove(["upload", "marks", "spk"]);
   await ensureOffscreen();
@@ -137,6 +138,7 @@ async function start(tabId, useMic, name, mode, autoUpload, micId, presentScreen
     target: "offscreen",
     type: "start",
     streamId,
+    feedTabId: feed ? tabId : null,
     desktopStreamId,
     desktopAudio,
     useMic,
@@ -153,6 +155,19 @@ async function start(tabId, useMic, name, mode, autoUpload, micId, presentScreen
   await chrome.storage.session.set({ recTabId: tabId, recMeetUrl: meetingPath(tab.url) });
   // Tab mode: the Meet page also sends my screen share (if I present) to the recorder
   await tellTab(tabId, { kind: mode !== "screen" ? "rec-start" : "watch-leave" });
+}
+
+// tabCapture only works after a click on the extension itself (toolbar icon, shortcut, right-click menu).
+// A button on the Meet page doesn't count, so the page then shares the tab itself (see dock.js).
+async function tabStreamId(tabId) {
+  try {
+    return await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+  } catch (e) {
+    if (!/not been invoked/i.test(e.message)) throw e;
+    const err = new Error("Chrome needs a click on Meet Recorder first: press Record on the Meet page, Alt+Shift+S, or the toolbar icon.");
+    err.notInvoked = true;
+    throw err;
+  }
 }
 
 // "meet.google.com/abc-defg-hij" part of a URL (ignores ?query and #hash)
@@ -216,9 +231,9 @@ function addSpeaker(name, lag, tabId) {
 }
 
 // Start with the choices saved in the popup. Always the tab itself (the screen picker needs the popup).
-async function startWithPrefs(tab) {
+async function startWithPrefs(tab, feed = false) {
   const { prefs = {} } = await chrome.storage.local.get("prefs");
-  await start(tab.id, prefs.useMic !== false, nameFromTab(tab), "tab", false, prefs.micId || null, false, prefs.quality || "standard");
+  await start(tab.id, prefs.useMic !== false, nameFromTab(tab), "tab", false, prefs.micId || null, false, prefs.quality || "standard", feed);
 }
 
 // The floating bar on the Meet page reads the recording state straight from session storage
@@ -385,11 +400,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       else if (msg.type === "stop") await stop();
       else if (msg.type === "bookmark") out.ok = await addBookmark();
       else if (msg.type === "speaker") await addSpeaker(msg.name, msg.lag, _sender.tab && _sender.tab.id);
-      else if (msg.type === "open-popup") {
+      else if (msg.type === "dock-start") {
+        // Record button on the Meet page. needShare: Chrome won't let us capture the tab, so the page shares it.
         try {
-          await chrome.action.openPopup();
-        } catch {
+          await startWithPrefs(_sender.tab, !!msg.feed);
+        } catch (e) {
           out.ok = false;
+          out.needShare = !!e.notInvoked;
+          out.error = e.message;
         }
       } else if (msg.type === "shortcut") {
         const all = await chrome.commands.getAll();

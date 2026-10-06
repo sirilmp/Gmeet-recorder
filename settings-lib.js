@@ -1,7 +1,6 @@
 // Settings shared by the settings page, the library and the background worker.
 const SETTINGS_DEFAULTS = {
-  showDock: true, // floating Record / Stop / Bookmark bar on the Meet page
-  dockPip: true, // the bar's Record pops it out into a window that stays on top of every tab
+  showDock: true, // floating Stop / Bookmark bar on the Meet page while recording
   autoUpload: false, // upload to Drive (through the saved script connection) when a recording ends
   deleteUploaded: false, // remove the local file once it is safely on Drive
   deleteAfterDays: 0, // remove local files older than this many days (0 = never)

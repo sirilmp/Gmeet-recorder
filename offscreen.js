@@ -244,57 +244,6 @@ function closeSharePc() {
   if (shareVideo) shareVideo.srcObject = null;
 }
 
-// ---------- the Meet tab shared by the page itself (Record button on the page; WebRTC loopback) ----------
-// Chrome lets tabCapture run only after a click on the extension itself, so then the page shares its own
-// tab (Chrome's "Share this tab" prompt) and sends it here.
-let feedPc = null;
-let feedAudioEl = null;
-let feedIce = [];
-
-async function openFeed(tabId) {
-  closeFeed();
-  const pc = (feedPc = new RTCPeerConnection({ iceServers: [] }));
-  const video = pc.addTransceiver("video", { direction: "recvonly" }).receiver.track;
-  const audio = pc.addTransceiver("audio", { direction: "recvonly" }).receiver.track;
-  pc.onicecandidate = (e) => {
-    if (e.candidate && pc === feedPc) relay(tabId, { kind: "feed-ice", candidate: e.candidate.toJSON() });
-  };
-  pc.onconnectionstatechange = () => {
-    if (pc === feedPc) diag({ feed: pc.connectionState === "failed" ? "FAILED: could not connect to the Meet page" : pc.connectionState });
-  };
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  // Ask the page for the meeting sound in stereo at a high bitrate, and the picture at the recording size
-  const sdp = offer.sdp.replace(/(a=fmtp:\d+ [^\r\n]*useinbandfec=1)/, "$1;stereo=1;maxaveragebitrate=510000");
-  relay(tabId, { kind: "feed-offer", sdp, w: W, h: H, fps: FPS });
-  // Chrome only delivers remote WebRTC audio to WebAudio if it is also attached to a media element
-  feedAudioEl = new Audio();
-  feedAudioEl.muted = true;
-  feedAudioEl.srcObject = new MediaStream([audio]);
-  feedAudioEl.play().catch(() => {});
-  return new MediaStream([audio, video]);
-}
-
-async function onFeedSignal(m) {
-  if (!feedPc) return;
-  if (m.kind === "answer") {
-    await feedPc.setRemoteDescription({ type: "answer", sdp: m.sdp });
-    for (const c of feedIce) await feedPc.addIceCandidate(c).catch(() => {});
-    feedIce = [];
-  } else if (m.kind === "ice") {
-    if (feedPc.remoteDescription) await feedPc.addIceCandidate(m.candidate).catch(() => {});
-    else feedIce.push(m.candidate);
-  }
-}
-
-function closeFeed() {
-  if (feedPc) feedPc.close();
-  feedPc = null;
-  feedIce = [];
-  if (feedAudioEl) feedAudioEl.srcObject = null;
-  feedAudioEl = null;
-}
-
 async function onShareSignal(m, tabId) {
   if (m.kind === "meet-muted") {
     // Muted in Meet: nothing of my mic goes into the recording
@@ -372,7 +321,7 @@ async function onShareSignal(m, tabId) {
 }
 
 // ---------- recording ----------
-async function startRecording(streamId, feedTabId, desktopStreamId, useMic, desktopAudio, micId, presentStreamId, quality) {
+async function startRecording(streamId, desktopStreamId, useMic, desktopAudio, micId, presentStreamId, quality) {
   if (recorder) throw new Error("Already recording.");
   const q = QUALITY[quality] || QUALITY.standard;
   W = q.w;
@@ -380,7 +329,6 @@ async function startRecording(streamId, feedTabId, desktopStreamId, useMic, desk
   FPS = q.fps;
   VBPS = q.vbps;
   const screenMode = !!desktopStreamId;
-  const feed = feedTabId != null;
   const tabConstraint = { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } };
   // Capture the tab at the recording size, not at full screen resolution / 30 fps
   const tabVideoConstraint = {
@@ -388,13 +336,10 @@ async function startRecording(streamId, feedTabId, desktopStreamId, useMic, desk
   };
 
   // Meet tab: audio of all remote participants + the tab's video
-  // (or the same, shared by the Meet page itself)
-  const tabStream = feed
-    ? await openFeed(feedTabId)
-    : await navigator.mediaDevices.getUserMedia({
-        audio: tabConstraint,
-        video: screenMode ? false : tabVideoConstraint,
-      });
+  const tabStream = await navigator.mediaDevices.getUserMedia({
+    audio: tabConstraint,
+    video: screenMode ? false : tabVideoConstraint,
+  });
   streams = [tabStream];
 
   let videoTrack;
@@ -482,13 +427,11 @@ async function startRecording(streamId, feedTabId, desktopStreamId, useMic, desk
     }
   }
 
-  // Tab audio -> recording AND speakers (capturing a tab mutes it otherwise; a shared tab keeps playing itself)
+  // Tab audio -> recording AND speakers (capturing a tab mutes it otherwise)
   const tabSource = audioCtx.createMediaStreamSource(tabStream);
   tabSource.connect(dest);
   watchLevel("tabLevel", tabSource);
-  if (feed) {
-    // nothing to play: Meet still plays its own sound
-  } else if (silentSink && tabStream.getAudioTracks().length) {
+  if (silentSink && tabStream.getAudioTracks().length) {
     tabOutEl = new Audio();
     tabOutEl.srcObject = new MediaStream(tabStream.getAudioTracks());
     applySpeaker();
@@ -681,7 +624,6 @@ function cleanup() {
   if (ticker) ticker.terminate();
   ticker = null;
   closeSharePc();
-  closeFeed();
   tabVideo = null;
   shareVideo = null;
   presentVideo = null;
@@ -827,7 +769,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.target !== "offscreen") return;
   if (msg.type === "start") {
     Transcriber.pause(); // the recording gets the whole CPU; transcripts carry on after it is saved
-    startRecording(msg.streamId, msg.feedTabId, msg.desktopStreamId, msg.useMic, msg.desktopAudio, msg.micId, msg.presentStreamId, msg.quality)
+    startRecording(msg.streamId, msg.desktopStreamId, msg.useMic, msg.desktopAudio, msg.micId, msg.presentStreamId, msg.quality)
       .then(() => sendResponse({ ok: true }))
       .catch((e) => {
         cleanup();
@@ -843,9 +785,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "stop") {
     stopRecording();
     sendResponse({ ok: true });
-  }
-  if (msg.type === "feed-signal") {
-    onFeedSignal(msg).catch((e) => console.warn("feed signal", e));
   }
   if (msg.type === "share-signal") {
     onShareSignal(msg.msg, sender.tab && sender.tab.id).catch((e) => console.warn("share signal", e));

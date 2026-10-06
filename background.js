@@ -1,4 +1,4 @@
-importScripts("settings-lib.js");
+importScripts("settings-lib.js", "drive.js");
 
 const OFFSCREEN_URL = "offscreen.html";
 const FOLDER = "MeetRecordings"; // inside the browser's Downloads folder
@@ -92,12 +92,13 @@ function getToken(interactive) {
   });
 }
 
-async function markUploaded({ startedAt, fileUrl, folderUrl }) {
+async function markUploaded({ startedAt, fileUrl, folderUrl, folderId, packaged, driveName }) {
   const { recordings = [] } = await chrome.storage.local.get("recordings");
   const r = recordings.find((x) => x.startedAt === startedAt);
   if (r) {
-    Object.assign(r, { uploaded: true, driveUrl: fileUrl, folderUrl });
+    Object.assign(r, { uploaded: true, driveUrl: fileUrl, folderUrl, driveFolderId: folderId || null, packaged: !!packaged, driveName });
     await chrome.storage.local.set({ recordings });
+    if (packaged) driveSync(startedAt); // the transcript is usually still being made: say how far it is
   }
 }
 
@@ -282,12 +283,16 @@ async function beginSave({ durationMs, size, ext }) {
   const meta = pending || { name: "Meeting", startedAt: Date.now() - durationMs, mode: "tab" };
   const { marks = [] } = await chrome.storage.session.get("marks");
   const filename = `${meta.name} ${stamp(meta.startedAt)}.${ext}`;
-  await chrome.storage.local.set({
-    saving: { name: meta.name, mode: meta.mode || "tab", startedAt: meta.startedAt, durationMs, size, filename, ext, bookmarks: marks },
-  });
+  const saving = { name: meta.name, mode: meta.mode || "tab", startedAt: meta.startedAt, durationMs, size, filename, ext, bookmarks: marks };
+  await chrome.storage.local.set({ saving });
   await chrome.storage.local.remove("pending");
   const { settings, driveConn } = await chrome.storage.local.get(["settings", "driveConn"]);
-  return { filename, startedAt: meta.startedAt, autoUpload: !!(settings && settings.autoUpload && driveConn && driveConn.url) };
+  return {
+    filename,
+    startedAt: meta.startedAt,
+    rec: saving, // what the Drive upload writes into the recording's info file
+    autoUpload: !!(settings && settings.autoUpload && driveConn && driveConn.url),
+  };
 }
 
 // Put the download into Downloads/MeetRecordings and add it to the recordings list.
@@ -317,10 +322,15 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
         bookmarks: saving.bookmarks || [],
         uploaded: false,
         driveUrl: null,
+        ...(saving.imported ? { imported: saving.imported } : {}),
       });
       await chrome.storage.local.set({ recordings });
       await chrome.storage.local.remove("saving");
-      if ((await getSettings()).autoTranscribe) trAdd(saving.startedAt, saving.ext).catch(() => {});
+      // Not for an imported recording that came with its transcript, or whose sender is still making one
+      const trK = "tr-" + saving.startedAt;
+      const hasTr = !!(await chrome.storage.local.get(trK))[trK];
+      const senderBusy = saving.imported && saving.imported.trStatus === "in-progress";
+      if ((await getSettings()).autoTranscribe && !hasTr && !senderBusy) trAdd(saving.startedAt, saving.ext).catch(() => {});
     }
     suggest({
       filename: `${FOLDER}/${saving ? saving.filename : item.filename}`,
@@ -339,6 +349,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       else if (msg.type === "token") out.token = await getToken(msg.interactive);
       else if (msg.type === "upload-status") await chrome.storage.session.set({ upload: msg.patch });
       else if (msg.type === "uploaded") await markUploaded(msg);
+      else if (msg.type === "drive-sync") Object.assign(out, await driveSync(msg.id));
       else if (msg.type === "stop") await stop();
       else if (msg.type === "bookmark") out.ok = await addBookmark();
       else if (msg.type === "open-popup") {
@@ -486,7 +497,37 @@ async function onTranscriptMsg(msg) {
     await chrome.storage.local.set({ [trpKey(id)]: { error: msg.error, at: Date.now() } });
     await trRemove(id);
   }
+  driveOnTranscript(msg);
   return {};
+}
+
+// ---------- keeping an uploaded recording's Drive folder up to date ----------
+// The transcript is made here in the background, often after the upload: Drive hears when it starts,
+// every 25%, and when it's finished (or cancelled). One sync at a time, so an older "in progress"
+// can never land after the finished transcript.
+let driveChain = Promise.resolve();
+const driveSteps = new Map(); // id -> last 25% step sent
+function driveSync(id) {
+  const run = driveChain.then(() => driveSyncPackage(id));
+  driveChain = run.catch(() => {});
+  return run.then((out) => {
+    if (out.error) console.warn("Drive transcript/notes update failed:", out.error);
+    return out;
+  });
+}
+function driveOnTranscript(msg) {
+  const id = msg.id;
+  if (msg.type === "tr-add" || msg.type === "tr-done" || msg.type === "tr-cancel" || msg.type === "tr-failed") {
+    driveSteps.delete(id);
+    if (msg.type === "tr-add") driveSteps.set(id, 0);
+    driveSync(id);
+  } else if (msg.type === "tr-progress") {
+    const step = Math.floor((msg.pct || 0) / 25) * 25;
+    if ((driveSteps.get(id) ?? -1) < step) {
+      driveSteps.set(id, step);
+      driveSync(id);
+    }
+  }
 }
 
 // A copy of the transcript next to the video in Downloads/MeetRecordings, so it outlives the extension:

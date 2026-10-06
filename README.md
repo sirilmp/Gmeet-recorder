@@ -26,6 +26,19 @@ Icon → **My recordings & Drive upload**. Per recording: **Open** (default vide
 4. Put it in `manifest.json` → `oauth2.client_id`, then reload the extension.
 Scope is `drive.file` (only files this extension creates).
 
+## Share a recording (with its transcript and notes)
+Each upload goes to its own Drive folder: `Meet Recordings / <date> / <recording> /` with the video,
+`<recording> transcript.txt` and `<recording>.meetrec.json` (name, date, length, bookmarks with notes and
+the transcript). A transcript made later, or edited notes, are sent to that folder again automatically.
+1. On an uploaded recording open the Drive menu → **Who can view the folder**, or share the folder
+   with someone in Drive, then **Copy share link**.
+2. The other person clicks **Import** in their library and pastes the link. Their own Drive must be
+   connected (that's how the extension reads folders shared with them). They can also download the
+   folder from Drive and choose (or drop) the .zip instead, no Drive connection needed.
+
+Sharing and Import need the newer Drive script: open **Connect Google Drive**, copy the code again,
+paste it over the old one, save, then Deploy → Manage deployments → ✏️ → New version → Deploy.
+
 ## Notes
 - The recording is buffered in memory until you stop (~1 GB/hour).
 - If a recording is moved/deleted outside Chrome, it shows "File missing".

@@ -17,6 +17,8 @@ const ICON = {
   upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M6.5 9.5L12 4l5.5 5.5M4 20h16"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   clip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.1 8.1L20 20M8.1 15.9L20 4M14.5 14.5"/></svg>',
+  tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z"/><circle cx="8" cy="8" r="1.5"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>',
 };
 
@@ -539,11 +541,11 @@ const ACCESS_LABELS = () => {
 };
 let getConnCache = null;
 function closeMenu() {
-  const m = document.getElementById("drive-menu");
+  const m = document.getElementById("pop-menu");
   if (m) m.remove();
 }
 document.addEventListener("click", (e) => {
-  if (!e.target.closest("#drive-menu") && !e.target.closest("[data-menu-btn]")) closeMenu();
+  if (!e.target.closest("#pop-menu") && !e.target.closest("[data-menu-btn]")) closeMenu();
 });
 window.addEventListener("scroll", closeMenu, true);
 
@@ -551,7 +553,7 @@ async function openDriveMenu(anchor, rec) {
   closeMenu();
   getConnCache = await getConn();
   const m = el("div", "menu");
-  m.id = "drive-menu";
+  m.id = "pop-menu";
   const item = (icon, label, sub, fn, on) => {
     const b = el("button", "mi" + (on ? " on" : ""), `${icon}<span>${label}${sub ? `<small>${sub}</small>` : ""}</span>${on ? "<i>✓</i>" : ""}`);
     b.type = "button";
@@ -643,6 +645,197 @@ async function openDriveMenu(anchor, rec) {
   m.style.left = Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8)) + "px";
 }
 
+// ---------- Tags: organize recordings by project or team ----------
+// A recording can have several tags (rec.tags: names). The list of tags lives in "tagList" so a tag
+// keeps its place, and survives having no recordings yet. The library stays grouped by day; picking
+// a tag above the list only narrows which recordings show.
+const NO_TAG = ""; // filter value for "Untagged" (a tag name is never empty)
+const tagsOf = (rec) => rec.tags || [];
+const sameTag = (a, b) => a.toLocaleLowerCase() === b.toLocaleLowerCase();
+
+async function getTagList() {
+  const { tagList = [] } = await chrome.storage.local.get("tagList");
+  return tagList;
+}
+
+// The tag called name (matching case-insensitively), created if it's new. Returns its name, or null.
+async function ensureTag(name) {
+  name = String(name || "").trim().replace(/\s+/g, " ").slice(0, 40);
+  if (!name) return null;
+  const list = await getTagList();
+  const had = list.find((t) => sameTag(t, name));
+  if (had) return had;
+  list.push(name);
+  await chrome.storage.local.set({ tagList: list });
+  return name;
+}
+
+async function renameTag(from, to) {
+  to = String(to || "").trim().replace(/\s+/g, " ").slice(0, 40);
+  if (!to || to === from) return from;
+  const list = await getTagList();
+  const into = list.find((t) => t !== from && sameTag(t, to)); // renamed onto another tag: merge them
+  const name = into || to;
+  const tagList = into ? list.filter((t) => t !== from) : list.map((t) => (t === from ? to : t));
+  const recordings = await getRecords();
+  for (const r of recordings) if (tagsOf(r).includes(from)) r.tags = [...new Set(tagsOf(r).map((t) => (t === from ? name : t)))];
+  await chrome.storage.local.set({ tagList, recordings });
+  if (tagFilter === from) setTagFilter(name, false);
+  return name;
+}
+
+async function deleteTag(name) {
+  const tagList = (await getTagList()).filter((t) => t !== name);
+  const recordings = await getRecords();
+  for (const r of recordings) if (tagsOf(r).includes(name)) r.tags = tagsOf(r).filter((t) => t !== name);
+  await chrome.storage.local.set({ tagList, recordings });
+  if (tagFilter === name) setTagFilter(null, false);
+}
+
+// Which tag the list is narrowed to (null: all recordings), remembered between visits
+let tagFilter = null;
+try {
+  tagFilter = localStorage.getItem("tagFilter");
+} catch {}
+function setTagFilter(name, draw = true) {
+  tagFilter = name;
+  try {
+    if (name === null) localStorage.removeItem("tagFilter");
+    else localStorage.setItem("tagFilter", name);
+  } catch {}
+  if (draw) render();
+}
+
+function placeMenu(m, anchor) {
+  anchor.dataset.menuBtn = "1";
+  document.body.append(m);
+  const r = anchor.getBoundingClientRect();
+  m.style.top = Math.min(r.bottom + 6, innerHeight - m.offsetHeight - 8) + "px";
+  m.style.left = Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8)) + "px";
+}
+
+function newTagField(placeholder, value, onEnter) {
+  const row = el("div", "mi-field");
+  const input = el("input", "input");
+  input.placeholder = placeholder;
+  input.value = value || "";
+  input.maxLength = 40;
+  input.onkeydown = async (e) => {
+    if (e.key === "Escape") return closeMenu();
+    if (e.key !== "Enter" || !input.value.trim()) return;
+    e.preventDefault();
+    await onEnter(input.value, input);
+  };
+  row.append(input);
+  return { row, input };
+}
+
+// The tag button on a recording: tick the tags it belongs to, or make a new one
+async function openTagMenu(anchor, rec) {
+  closeMenu();
+  const [list, recordings] = await Promise.all([getTagList(), getRecords()]);
+  const mine = new Set(tagsOf(recordings.find((r) => r.downloadId === rec.downloadId) || rec));
+  const m = el("div", "menu tag-menu");
+  m.id = "pop-menu";
+  m.append(el("div", "mh first", "Tags"));
+  const save = async () => {
+    const order = await getTagList();
+    await updateRecord(rec.downloadId, { tags: order.filter((t) => mine.has(t)) });
+    render();
+  };
+  const row = (name) => {
+    const b = el("button", "mi" + (mine.has(name) ? " on" : ""), `${ICON.tag}<span>${esc(name)}</span><i>${mine.has(name) ? "✓" : ""}</i>`);
+    b.type = "button";
+    b.dataset.tag = name;
+    b.onclick = () => {
+      if (mine.has(name)) mine.delete(name);
+      else mine.add(name);
+      b.classList.toggle("on", mine.has(name));
+      b.querySelector("i").textContent = mine.has(name) ? "✓" : "";
+      save();
+    };
+    return b;
+  };
+  const rows = el("div", "mi-list");
+  for (const t of list) rows.append(row(t));
+  m.append(rows);
+  const { row: field, input } = newTagField(list.length ? "New tag, e.g. a project or team" : "Name a tag, e.g. a project or team", "", async (value) => {
+    const name = await ensureTag(value);
+    if (!name) return;
+    input.value = "";
+    const b = [...rows.children].find((x) => x.dataset.tag === name);
+    if (!b) {
+      mine.add(name);
+      rows.append(row(name));
+      await save();
+    } else if (!mine.has(name)) b.click();
+  });
+  m.append(field);
+  placeMenu(m, anchor);
+  input.focus();
+}
+
+// The ▾ on the picked tag above the list: rename it or delete it
+function openTagManage(anchor, name) {
+  closeMenu();
+  const m = el("div", "menu tag-menu");
+  m.id = "pop-menu";
+  m.append(el("div", "mh first", "Rename tag"));
+  const { row, input } = newTagField("Tag name", name, async (value) => {
+    closeMenu();
+    const to = await renameTag(name, value);
+    if (to !== name) toast(`Renamed to "${to}"`);
+    render();
+  });
+  m.append(row);
+  const del = el("button", "mi danger", `${ICON.trash}<span>Delete tag<small>The recordings stay, they just lose this tag</small></span>`);
+  del.type = "button";
+  del.onclick = async () => {
+    closeMenu();
+    if (!confirm(`Delete the tag "${name}"? The recordings stay in your library.`)) return;
+    await deleteTag(name);
+    render();
+  };
+  m.append(del);
+  placeMenu(m, anchor);
+  input.select();
+}
+
+// The row of tags above the list: All, each tag with how many recordings it has, Untagged
+function renderTagBar(all, list) {
+  const bar = $("tags");
+  if (!list.length) {
+    bar.hidden = true;
+    return bar.replaceChildren();
+  }
+  const count = (t) => all.filter((r) => (t === NO_TAG ? !tagsOf(r).length : tagsOf(r).includes(t))).length;
+  const pill = (label, value, n) => {
+    const on = tagFilter === value;
+    const b = el("button", "tagf" + (on ? " on" : ""), `${value ? ICON.tag : ""}<span>${esc(label)}</span><span class="n">${n}</span>`);
+    b.type = "button";
+    b.setAttribute("aria-pressed", on);
+    b.onclick = () => setTagFilter(on && value !== null ? null : value);
+    if (on && value) {
+      const more = el("span", "tagf-more", ICON.chev);
+      more.title = "Rename or delete this tag";
+      more.setAttribute("role", "button");
+      more.onclick = (e) => {
+        e.stopPropagation();
+        openTagManage(b, value);
+      };
+      b.append(more);
+    }
+    return b;
+  };
+  const untagged = count(NO_TAG);
+  bar.replaceChildren(
+    pill("All", null, all.length),
+    ...list.map((t) => pill(t, t, count(t))),
+    ...(untagged && untagged < all.length ? [pill("Untagged", NO_TAG, untagged)] : [])
+  );
+  bar.hidden = false;
+}
+
 // found: the search match ({ terms, hits }) when the list is filtered
 async function buildCard(rec, found) {
   const [item] = await search({ id: rec.downloadId });
@@ -687,6 +880,16 @@ async function buildCard(rec, found) {
         `<span>${ICON.disk}${fmtSize(rec.size)}</span>`
     )
   );
+  if (tagsOf(rec).length) {
+    const meta = info.lastChild;
+    for (const t of tagsOf(rec)) {
+      const c = el("button", "tg" + (tagFilter === t ? " on" : ""), `${ICON.tag}${esc(t)}`);
+      c.type = "button";
+      c.title = tagFilter === t ? "Show all recordings" : `Show only "${t}"`;
+      c.onclick = () => setTagFilter(tagFilter === t ? null : t);
+      meta.append(c);
+    }
+  }
   if (rec.bookmarks && rec.bookmarks.length) {
     const marks = el("div", "marks");
     for (const { ms, note } of marksOf(rec)) {
@@ -730,6 +933,9 @@ async function buildCard(rec, found) {
     fb.title = "Show file in folder";
     actions.append(fb);
   }
+  const tagBtn = btn(ICON.tag, "", "btn-ghost", (e) => openTagMenu(e.currentTarget, rec));
+  tagBtn.title = "Tags: put this recording under a project or team";
+  actions.append(tagBtn);
   actions.append(
     btn(ICON.trash, "", "btn-ghost btn-soft-danger", async () => {
       if (!confirm(`Delete "${rec.name}"${exists ? " and its file from disk" : ""}?`)) return;
@@ -785,7 +991,7 @@ function hl(text, re) {
 // it isn't, else the transcript lines to show: the ones with all the words if any, else the ones with most.
 function matchRecording(rec, terms) {
   const lines = trIndex.get(rec.startedAt) || [];
-  const head = (rec.name + "\n" + marksOf(rec).map((m) => m.note).join("\n")).toLowerCase();
+  const head = [rec.name, ...tagsOf(rec), ...marksOf(rec).map((m) => m.note)].join("\n").toLowerCase();
   const counts = lines.map((ln) => terms.reduce((n, t) => n + ln.l.includes(t), 0));
   for (const t of terms) if (!head.includes(t) && !lines.some((ln) => ln.l.includes(t))) return null;
   const best = Math.max(0, ...counts);
@@ -819,6 +1025,9 @@ let renderSeq = 0;
 async function render() {
   const seq = ++renderSeq;
   const all = (await getRecords()).sort((a, b) => b.startedAt - a.startedAt);
+  const tagList = await getTagList();
+  for (const r of all) for (const t of tagsOf(r)) if (!tagList.includes(t)) tagList.push(t);
+  if (tagFilter !== null && tagFilter !== NO_TAG && !tagList.includes(tagFilter)) setTagFilter(null, false);
   const terms = searchTerms();
   const q = terms.length > 0;
   if (q) await loadTrIndex(all);
@@ -828,7 +1037,9 @@ async function render() {
     const m = matchRecording(r, terms);
     if (m) matches.set(r, m);
   }
-  const records = q ? all.filter((r) => matches.has(r)) : all;
+  const tagged = (r) => tagFilter === null || (tagFilter === NO_TAG ? !tagsOf(r).length : tagsOf(r).includes(tagFilter));
+  const records = all.filter((r) => tagged(r) && (!q || matches.has(r)));
+  const narrowed = q || tagFilter !== null;
 
   // Group by calendar day (newest first)
   const groups = new Map();
@@ -843,7 +1054,7 @@ async function render() {
     const label = dayLabel(recs[0].startedAt);
     const recent = label === "Today" || label === "Yesterday";
     const day = el("details", "day");
-    day.open = q ? true : openDays[key] ?? recent; // searching opens everything
+    day.open = narrowed ? true : openDays[key] ?? recent; // searching or picking a tag opens everything
     const total = recs.reduce((n, r) => n + (r.durationMs || 0), 0);
     const summary = el(
       "summary",
@@ -858,7 +1069,7 @@ async function render() {
     if (seq !== renderSeq) return; // a newer render started
     day.append(body);
     day.ontoggle = () => {
-      if (q) return;
+      if (narrowed) return;
       openDays[key] = day.open;
       saveOpenDays();
     };
@@ -869,7 +1080,12 @@ async function render() {
   $("stat-count").textContent = all.length;
   $("stat-size").textContent = fmtSize(all.reduce((n, r) => n + (r.size || 0), 0));
   $("empty").hidden = all.length > 0;
-  $("no-hits").hidden = !all.length || !q || records.length > 0;
+  $("no-hits").hidden = !all.length || !narrowed || records.length > 0;
+  const tagName = tagFilter === NO_TAG ? "Untagged" : tagFilter;
+  $("no-hits-text").textContent = q
+    ? `No title, bookmark note or transcript${tagFilter !== null ? ` in "${tagName}"` : ""} has those words.`
+    : `No recordings in "${tagName}" yet. Use the tag button on a recording to add it.`;
+  renderTagBar(all, tagList);
   $("list").replaceChildren(frag);
   paintTrChips();
   for (const id of uploading.keys()) showProgress(id);

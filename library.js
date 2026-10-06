@@ -212,13 +212,20 @@ async function dropKept(rec) {
 async function pruneKept() {
   try {
     const recs = await getRecords();
+    // recordings waiting for a transcript are read from these copies too
+    const { trQueue = [] } = await chrome.storage.local.get("trQueue");
+    const queued = new Set(trQueue.map((x) => x.id));
     // Imported recordings count their days from the import, not from when they were recorded
-    const wanted = new Map(recs.filter((r) => !r.uploaded).map((r) => [`keep-${r.startedAt}.${extOf(r)}`, r.imported ? r.imported.at : r.startedAt]));
+    const wanted = new Map(
+      recs.filter((r) => !r.uploaded || queued.has(r.startedAt)).map((r) => [`keep-${r.startedAt}.${extOf(r)}`, r.imported ? r.imported.at : r.startedAt])
+    );
     const root = await navigator.storage.getDirectory();
     for await (const [name, h] of root.entries()) {
+      // trsrc-*: a copy made just for a transcript, gone once it is no longer queued
+      if (name.startsWith("trsrc-") && !queued.has(parseInt(name.slice(6), 10))) await root.removeEntry(name).catch(() => {});
       if (!name.startsWith("keep-")) continue;
       const age = Date.now() - (wanted.get(name) || parseInt(name.slice(5), 10));
-      if (!wanted.has(name) || !(age < KEEP_DAYS * 864e5)) await root.removeEntry(name).catch(() => {});
+      if (!wanted.has(name) || !(age < KEEP_DAYS * 864e5 || queued.has(parseInt(name.slice(5), 10)))) await root.removeEntry(name).catch(() => {});
     }
   } catch {}
 }
@@ -321,6 +328,7 @@ async function uploadToDrive(rec, item) {
   const oldUrl = conn.url;
   try {
     const blob = await readLocalFile(rec, item);
+    let sentPct = null; // transcript progress the uploaded info file carries
     uploading.set(id, 0);
     showProgress(id);
     const out = await driveUploadPackage(
@@ -334,7 +342,7 @@ async function uploadToDrive(rec, item) {
         uploading.set(id, p);
         showProgress(id);
       },
-      () => trPctOf(rec)
+      async () => (sentPct = await trPctFor(rec.startedAt))
     );
     uploading.delete(id);
     if (conn.url !== oldUrl) await chrome.storage.local.set({ driveConn: conn });
@@ -346,11 +354,12 @@ async function uploadToDrive(rec, item) {
       packaged: out.packaged,
       driveName: fileName,
     });
-    dropKept(rec);
-    const pct = trPctOf(rec);
-    if (pct != null && !out.sidecarError) {
-      trToldDrive.set(rec.startedAt, Math.floor(pct / 25) * 25);
-      toast(`"${rec.name}" is on Drive. Its transcript is still being made (${pct}%) and is added there when it's finished.`);
+    // A transcript still being made reads the kept copy: leave it until that's done (pruneKept frees it)
+    if (sentPct == null) dropKept(rec);
+    if (sentPct != null && !out.sidecarError) {
+      // it may have moved on (or finished) while the upload was ending: the background sends the latest
+      if (out.packaged) bgSend({ type: "drive-sync", id: rec.startedAt });
+      toast(`"${rec.name}" is on Drive. Its transcript is still being made (${sentPct}%) and is added there when it's finished.`);
     } else if (out.sidecarError) toast(`"${rec.name}" is on Drive, but its transcript and notes were not: ${out.sidecarError}`, true);
     else if (!out.packaged) toast(`"${rec.name}" uploaded to Google Drive → ${folder}. Update your Drive script to keep each recording in its own folder.`);
     else toast(`"${rec.name}" uploaded to Google Drive → ${folder} → ${pkgBase(fileName)}`);
@@ -373,39 +382,14 @@ const storedTranscript = async (rec) => (await chrome.storage.local.get(trKey(re
 // The Drive folder that holds this recording (its own folder, or the date folder for older uploads)
 const driveFolderOf = (rec) => rec.driveFolderId || ((rec.folderUrl || "").match(/\/folders\/([^/?#]+)/) || [])[1] || null;
 
-// Send the transcript + notes to Drive again (after a new transcript, its progress, or edited bookmarks).
-// Runs one at a time, so an older "in progress" update can never land after the finished one.
-let syncChain = Promise.resolve();
-let toldOldScript = false;
-function syncPackage(rec, quiet) {
-  const run = syncChain.then(() => syncPackageNow(rec, quiet));
-  syncChain = run.catch(() => {});
-  return run;
-}
-async function syncPackageNow(rec, quiet) {
-  // The stored record is the truth (the player's copy can miss an upload that finished meanwhile)
-  rec = (await getRecords()).find((x) => x.startedAt === rec.startedAt) || rec;
-  const conn = await getConn();
-  const folderId = driveFolderOf(rec);
-  if (!conn || !rec.uploaded || !folderId) {
-    if (!quiet) toast("This recording isn't on your Drive yet", true);
-    return;
-  }
-  try {
-    const { v } = await driveScriptCall(conn, { action: "ping" });
-    if (!(v >= 2)) throw new Error(DRIVE_OLD_SCRIPT);
-    const [item] = rec.downloadId ? await search({ id: rec.downloadId }) : [];
-    const videoName = rec.driveName || (item && item.filename.split(/[\\/]/).pop()) || `${rec.name} ${stampOf(rec.startedAt)}.${extOf(rec)}`;
-    await driveUploadSidecars(conn, rec, videoName, await storedTranscript(rec), { folderId }, true, trPctOf(rec));
+// Send the transcript + notes to Drive again (edited bookmarks, a deleted transcript, the menu item).
+// The background worker does it, one at a time with its own transcript-progress updates.
+async function syncPackage(rec, quiet) {
+  const out = (await bgSend({ type: "drive-sync", id: rec.startedAt })) || { error: "the extension did not answer" };
+  if (out.ok) {
     if (!quiet) toast("Transcript and notes updated on Drive");
-  } catch (e) {
-    // Quiet syncs still say so when they fail, but "update your script" only once per visit
-    if (quiet && e.message === DRIVE_OLD_SCRIPT) {
-      if (toldOldScript) return;
-      toldOldScript = true;
-    }
-    toast(`Could not update the transcript and notes on Drive: ${e.message}`, true);
-  }
+  } else if (!quiet) toast(out.skipped || `Could not update the transcript and notes on Drive: ${out.error}`, !!out.error || !!out.skipped);
+  else if (out.error) toast(`Could not update the transcript and notes on Drive: ${out.error}`, true);
 }
 
 // ---------- UI ----------
@@ -582,12 +566,11 @@ async function buildCard(rec) {
     name.append(chip);
   }
   if (rec.uploaded) name.append(el("span", "chip ok", "On Drive"));
-  if (trProgress.has(rec.startedAt)) {
-    const chip = el("span", "chip warn", `Transcript ${trProgress.get(rec.startedAt)}%`);
-    chip.dataset.tr = rec.startedAt;
-    chip.title = "The transcript is being made" + (rec.uploaded ? ". Drive gets it when it's finished." : "");
-    name.append(chip);
-  } else if (rec.imported && rec.imported.trStatus === "in-progress") {
+  const trChip = el("span", "chip tab");
+  trChip.dataset.tr = rec.startedAt;
+  trChip.hidden = true;
+  name.append(trChip);
+  if (rec.imported && rec.imported.trStatus === "in-progress") {
     const chip = el("span", "chip warn", "Transcript pending");
     chip.title = `The sender's transcript was ${rec.imported.trPct || 0}% done when you imported this. Open it to check Drive for the finished one.`;
     name.append(chip);
@@ -644,6 +627,7 @@ async function buildCard(rec) {
       if (!confirm(`Delete "${rec.name}"${exists ? " and its file from disk" : ""}?`)) return;
       if (exists) await new Promise((r) => chrome.downloads.removeFile(rec.downloadId, r));
       await removeRecord(rec.downloadId);
+      bgSend({ type: "tr-cancel", id: rec.startedAt });
       dropKept(rec);
       render();
     })
@@ -701,6 +685,7 @@ async function render() {
   $("stat-size").textContent = fmtSize(all.reduce((n, r) => n + (r.size || 0), 0));
   $("empty").hidden = all.length > 0;
   $("list").replaceChildren(frag);
+  paintTrChips();
   for (const id of uploading.keys()) showProgress(id);
   document.querySelectorAll("progress[data-up]").forEach((p) => (p.hidden = !uploading.has(+p.dataset.up)));
 }
@@ -854,14 +839,11 @@ function closePlayer() {
   playerUrl = null;
   playerRec = null;
   playerBlob = null;
-  stopTranscribe();
   $("pl-cap").hidden = true;
   if ($("dlg-player").open) $("dlg-player").close();
 }
-function askClosePlayer() {
-  if (trWorker && !confirm("The transcript is still being made. Stop it and close?")) return;
-  closePlayer();
-}
+// A transcript being made carries on in the background, so closing never has to ask
+const askClosePlayer = closePlayer;
 $("pl-close").onclick = askClosePlayer;
 $("dlg-player").addEventListener("cancel", (e) => {
   e.preventDefault();
@@ -1132,11 +1114,9 @@ let paintPlayerTicks = () => {};
 })();
 
 // ---------- transcript (speech-to-text on this PC) ----------
-let trWorker = null;
-let trRec = null; // the recording trWorker is transcribing
-const trProgress = new Map(); // startedAt -> percent, while a transcript is being made
-const trToldDrive = new Map(); // startedAt -> last percent step sent to Drive
-const trPctOf = (rec) => (trProgress.has(rec.startedAt) ? trProgress.get(rec.startedAt) : null);
+// Transcripts are made in the background (transcriber.js in the recorder's offscreen page, queued by
+// background.js), so they keep going when the player or the library is closed. This panel only shows
+// the state kept in storage: tr-<id> (done), trp-<id> (progress or error), trQueue and trState.
 let trActive = -1;
 let trSegs = [];
 let trCC = true;
@@ -1147,18 +1127,23 @@ const vttTime = (s) => {
   const p = (n, w = 2) => String(n).padStart(w, "0");
   return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:${p(Math.floor(ms / 1000) % 60)}.${p(ms % 1000, 3)}`;
 };
+const bgSend = (msg) => chrome.runtime.sendMessage({ target: "background", ...msg }).catch(() => null);
 
-function renderTranscript(segs) {
-  trSegs = segs || [];
-  trActive = -1;
-  const list = $("tr-list");
-  list.replaceChildren();
+function renderTranscript(segs, busy = false) {
+  segs = segs || [];
+  for (const k of ["tr-copy", "tr-vtt", "tr-del"]) $(k).hidden = !segs.length || busy;
+  // progress updates re-read the same lines: only rebuild the list when it actually grew
+  const same = segs.length === trSegs.length && (!segs.length || segs[segs.length - 1].s === trSegs[trSegs.length - 1].s);
+  trSegs = segs;
   const has = trSegs.length > 0;
-  list.hidden = !has;
   $("pl-cc").hidden = !has;
   $("pl-cc").classList.toggle("on", has && trCC);
-  for (const k of ["tr-copy", "tr-vtt", "tr-del"]) $(k).hidden = !has || !!trWorker;
-  $("tr-empty").hidden = has || !!trWorker;
+  $("tr-empty").hidden = has || busy;
+  const list = $("tr-list");
+  list.hidden = !has;
+  if (same && list.childElementCount === trSegs.length) return;
+  trActive = -1;
+  list.replaceChildren();
   for (const sg of trSegs) {
     const row = el("div", "tr-line");
     row.dataset.s = sg.s;
@@ -1170,149 +1155,107 @@ function renderTranscript(segs) {
     };
     list.append(row);
   }
+  syncCaption();
 }
 
 async function loadTranscript(rec) {
-  renderTranscript([]);
-  $("tr-state").textContent = "";
-  $("tr-bar").hidden = true;
-  $("tr-gen").hidden = false;
-  $("tr-gen").textContent = "Generate transcript";
-  $("tr-pending").hidden = true;
-  const got = (await chrome.storage.local.get(trKey(rec)))[trKey(rec)];
+  const id = rec.startedAt;
+  const got = await chrome.storage.local.get([trKey(rec), "trp-" + id, "trQueue", "trState"]);
   if (playerRec !== rec) return;
-  // Imported while the sender's transcript was still being made
-  if (!got && rec.imported && rec.imported.trStatus === "in-progress") {
+  const done = got[trKey(rec)];
+  const prog = got["trp-" + id];
+  const ahead = (got.trQueue || []).findIndex((x) => x.id === id);
+  const st = got.trState && got.trState.id === id ? got.trState : null;
+  const state = (t) => ($("tr-state").textContent = t);
+  $("tr-pending").hidden = true;
+  $("tr-bar").hidden = !st;
+  if (st) $("tr-fill").style.width = (st.pct || 0) + "%";
+  if (ahead >= 0) {
+    // waiting or being made: show the lines found so far
+    renderTranscript((prog && prog.segments) || [], true);
+    $("tr-gen").textContent = "Cancel";
+    if (st) state(st.text || "Working…");
+    else if (ahead === 0) state("Starting…");
+    else state(`Waiting for ${ahead} other recording${ahead > 1 ? "s" : ""}…`);
+  } else if (done) {
+    // an imported recording that now has its transcript (fetched, or made here) is no longer pending
+    if (rec.imported && rec.imported.trStatus === "in-progress") {
+      rec.imported = { ...rec.imported, trStatus: "done" };
+      updateRecord(rec.downloadId, { imported: rec.imported }).then(() => render());
+    }
+    renderTranscript(done.segments);
+    state(done.segments && done.segments.length ? `${done.segments.length} lines` : "No speech was found.");
+    $("tr-gen").textContent = "Redo";
+  } else if (rec.imported && rec.imported.trStatus === "in-progress") {
+    // Imported while the sender's transcript was still being made
+    renderTranscript([]);
+    state("");
+    $("tr-gen").textContent = "Make my own";
     $("tr-pending-text").textContent = `The sender's transcript was still being made (${rec.imported.trPct || 0}%) when you imported this.`;
     $("tr-fetch").hidden = !rec.imported.source;
     if (!rec.imported.source) $("tr-pending-text").textContent += " Import it again once they've finished, or make your own.";
     $("tr-pending").hidden = false;
     $("tr-empty").hidden = true;
-  }
-  if (got && got.segments && got.segments.length) {
-    renderTranscript(got.segments);
-    $("tr-state").textContent = `${got.segments.length} lines`;
-    $("tr-gen").textContent = "Redo";
-  } else if (got) {
-    $("tr-state").textContent = "No speech was found.";
-  }
-}
-
-// finished: the transcript is about to be saved (and sent to Drive), so no "cancelled" update is needed
-function stopTranscribe(finished) {
-  if (trWorker) {
-    trWorker.terminate();
-    trWorker = null;
-  }
-  $("tr-bar").hidden = true;
-  const rec = trRec;
-  trRec = null;
-  if (rec && trProgress.delete(rec.startedAt)) {
-    const told = trToldDrive.delete(rec.startedAt);
-    render();
-    if (told && !finished) syncPackage(rec, true); // Drive said "in progress": take that back
-  }
-}
-
-// How far the transcript being made right now has got, shown on the card and sent to Drive
-function setTrProgress(rec, pct) {
-  trProgress.set(rec.startedAt, pct);
-  document.querySelectorAll(`[data-tr="${rec.startedAt}"]`).forEach((c) => (c.textContent = `Transcript ${pct}%`));
-  // Tell Drive at the start and every 25%, not on every step
-  const step = Math.floor(pct / 25) * 25;
-  if ((trToldDrive.get(rec.startedAt) ?? -1) < step) {
-    trToldDrive.set(rec.startedAt, step);
-    syncPackage(rec, true);
-  }
-}
-
-async function decodeMono16k(blob) {
-  const ctx = new AudioContext({ sampleRate: 16000 });
-  try {
-    const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
-    const n = buf.numberOfChannels;
-    const out = new Float32Array(buf.length);
-    for (let c = 0; c < n; c++) {
-      const d = buf.getChannelData(c);
-      for (let i = 0; i < d.length; i++) out[i] += d[i] / n;
-    }
-    return out;
-  } finally {
-    ctx.close();
-  }
-}
-
-async function generateTranscript() {
-  if (trWorker) {
-    // the button doubles as Cancel while running
-    stopTranscribe();
-    $("tr-state").textContent = "Stopped.";
-    $("tr-gen").textContent = trSegs.length ? "Redo" : "Generate transcript";
-    renderTranscript(trSegs);
-    return;
-  }
-  const rec = playerRec;
-  const blob = playerBlob;
-  if (!rec || !blob) return;
-  const s = await getSettings();
-  const state = (t) => ($("tr-state").textContent = t);
-  $("tr-gen").textContent = "Cancel";
-  $("tr-bar").hidden = false;
-  $("tr-fill").style.width = "0%";
-  $("tr-empty").hidden = true;
-  for (const k of ["tr-copy", "tr-vtt", "tr-del"]) $(k).hidden = true;
-  try {
-    state("Reading the audio…");
-    const audio = await decodeMono16k(blob);
-    if (playerRec !== rec) return;
-    const w = new Worker("transcribe-worker.js", { type: "module" });
-    trWorker = w;
-    trRec = rec;
-    trProgress.set(rec.startedAt, 0);
-    render();
-    setTrProgress(rec, 0);
+  } else {
     renderTranscript([]);
-    w.onmessage = async (e) => {
-      const m = e.data;
-      if (trWorker !== w) return;
-      if (m.type === "status") state(m.text);
-      else if (m.type === "download") {
-        const pct = m.total ? Math.round((m.loaded / m.total) * 100) : 0;
-        state(`Downloading the speech model (once)… ${pct}%`);
-        $("tr-fill").style.width = pct + "%";
-      } else if (m.type === "progress") {
-        $("tr-fill").style.width = Math.round((m.done / m.total) * 100) + "%";
-        state(`Transcribing… ${Math.round((m.done / m.total) * 100)}%`);
-        setTrProgress(rec, Math.round((m.done / m.total) * 100));
-        renderTranscript(m.segments);
-        for (const k of ["tr-copy", "tr-vtt", "tr-del"]) $(k).hidden = true;
-      } else if (m.type === "done") {
-        stopTranscribe(true);
-        await chrome.storage.local.set({
-          [trKey(rec)]: { model: s.transcriptModel, lang: s.transcriptLang, at: Date.now(), segments: m.segments },
-        });
-        if (playerRec === rec) loadTranscript(rec);
-        syncPackage(rec, true);
-      } else if (m.type === "error") {
-        stopTranscribe();
-        state("Failed: " + m.message);
-        $("tr-gen").textContent = "Try again";
-      }
-    };
-    w.onerror = (e) => {
-      stopTranscribe();
-      state("Failed: " + (e.message || "the speech engine could not start"));
-      $("tr-gen").textContent = "Try again";
-    };
-    w.postMessage({ type: "run", audio, model: s.transcriptModel, language: s.transcriptLang }, [audio.buffer]);
-  } catch (e) {
-    stopTranscribe();
-    state("Couldn't read this recording's audio: " + e.message);
-    $("tr-gen").textContent = "Try again";
+    state(prog && prog.error ? "Failed: " + prog.error : "");
+    $("tr-gen").textContent = prog && prog.error ? "Try again" : "Generate transcript";
   }
 }
 
-$("tr-gen").onclick = generateTranscript;
+// Start (or cancel) a transcript of the open recording
+$("tr-gen").onclick = async () => {
+  const rec = playerRec;
+  if (!rec) return;
+  const gen = $("tr-gen");
+  gen.disabled = true;
+  try {
+    const { trQueue = [] } = await chrome.storage.local.get("trQueue");
+    if (trQueue.some((x) => x.id === rec.startedAt)) {
+      await bgSend({ type: "tr-cancel", id: rec.startedAt });
+      return;
+    }
+    // Older recordings have no copy inside the extension: give the background one to read
+    if (!(await keptFile(rec))) {
+      if (!playerBlob) return;
+      $("tr-state").textContent = "Preparing…";
+      const root = await navigator.storage.getDirectory();
+      const h = await root.getFileHandle(`trsrc-${rec.startedAt}.${extOf(rec)}`, { create: true });
+      await playerBlob.stream().pipeTo(await h.createWritable());
+    }
+    await bgSend({ type: "tr-add", id: rec.startedAt, ext: extOf(rec), front: true });
+  } catch (e) {
+    $("tr-state").textContent = "Couldn't start: " + e.message;
+  } finally {
+    gen.disabled = false;
+    if (playerRec === rec) loadTranscript(rec);
+  }
+};
+
+// Live updates from the background job, for the open player and the list
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (playerRec) {
+    const id = playerRec.startedAt;
+    if (changes.trQueue || changes.trState || changes["tr-" + id] || changes["trp-" + id]) loadTranscript(playerRec);
+  }
+  if (changes.trQueue || changes.trState) paintTrChips();
+});
+
+// "Transcribing 40%" / "Transcript queued" on the cards
+async function paintTrChips() {
+  const { trQueue = [], trState } = await chrome.storage.local.get(["trQueue", "trState"]);
+  for (const c of document.querySelectorAll("[data-tr]")) {
+    const id = +c.dataset.tr;
+    const at = trQueue.findIndex((x) => x.id === id);
+    c.hidden = at < 0;
+    if (at < 0) continue;
+    if (trState && trState.id === id)
+      c.textContent = trState.phase === "paused" ? "Transcript paused" : trState.phase === "transcribing" ? `Transcribing ${trState.pct}%` : "Transcribing…";
+    else c.textContent = "Transcript queued";
+  }
+}
+
 $("tr-copy").onclick = async () => {
   await navigator.clipboard.writeText(trSegs.map((x) => `[${stamp(x.s)}] ${x.t}`).join("\n"));
   toast("Transcript copied");
@@ -1376,7 +1319,7 @@ async function playRecording(rec, item, startAt) {
   const v = $("pl-video");
   playerRec = rec;
   v.removeAttribute("src");
-  stopTranscribe();
+  trSegs = [];
   loadTranscript(rec);
   renderMarks();
   try {
@@ -1403,6 +1346,7 @@ async function playRecording(rec, item, startAt) {
 $("search").oninput = () => render();
 renderDriveBtn();
 pruneKept().then(showRecover);
+bgSend({ type: "tr-kick" }); // carries on a transcript that was interrupted (e.g. the browser closed)
 runCleanup().then((n) => n && render()).catch(() => {});
 render();
 chrome.downloads.onChanged.addListener(() => render());

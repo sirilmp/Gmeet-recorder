@@ -700,16 +700,20 @@ async function finish() {
     console.error("finish failed", e);
     cleanup();
     chrome.runtime.sendMessage({ target: "background", type: "stopped", error: e.message });
+  } finally {
+    Transcriber.resume(); // the background queues the new recording; this picks it up
   }
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.target !== "offscreen") return;
   if (msg.type === "start") {
+    Transcriber.pause(); // the recording gets the whole CPU; transcripts carry on after it is saved
     startRecording(msg.streamId, msg.desktopStreamId, msg.useMic, msg.desktopAudio, msg.micId, msg.presentStreamId, msg.quality)
       .then(() => sendResponse({ ok: true }))
       .catch((e) => {
         cleanup();
+        Transcriber.resume();
         sendResponse({ ok: false, error: e.message });
       });
     return true;

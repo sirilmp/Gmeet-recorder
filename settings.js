@@ -24,6 +24,7 @@ async function init() {
   const s = await getSettings();
   $("showDock").checked = s.showDock;
   $("autoUpload").checked = s.autoUpload;
+  $("autoTranscribe").checked = s.autoTranscribe;
   $("deleteUploaded").checked = s.deleteUploaded;
   $("deleteAfterDays").value = String(s.deleteAfterDays);
   $("autoRecord").value = s.autoRecord;
@@ -43,6 +44,10 @@ $("showDock").onchange = async () => {
 };
 $("autoUpload").onchange = async () => {
   await saveSettings({ autoUpload: $("autoUpload").checked });
+  saved();
+};
+$("autoTranscribe").onchange = async () => {
+  await saveSettings({ autoTranscribe: $("autoTranscribe").checked });
   saved();
 };
 $("deleteUploaded").onchange = async () => {

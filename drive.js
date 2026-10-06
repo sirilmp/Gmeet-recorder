@@ -253,8 +253,9 @@ async function driveScriptCall(conn, body) {
   }
   if (!out) {
     // Show what Google answered (e.g. a sign-in page or a script error page) to make it fixable
-    const doc = new DOMParser().parseFromString(text, "text/html");
-    const said = ((doc.title || "") + " " + (doc.body ? doc.body.innerText : ""))
+    // (the background worker has no DOMParser: strip the tags there)
+    const doc = typeof DOMParser !== "undefined" ? new DOMParser().parseFromString(text, "text/html") : null;
+    const said = (doc ? (doc.title || "") + " " + (doc.body ? doc.body.innerText : "") : text.replace(/<[^>]*>/g, " "))
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 160);
@@ -402,12 +403,48 @@ async function driveUploadPackage(conn, blob, rec, videoName, folderName, transc
   try {
     // Read the transcript state now, after the (long) video upload: it may have moved on meanwhile
     const tr = typeof transcript === "function" ? await transcript() : transcript;
-    const pct = typeof trPct === "function" ? trPct() : trPct;
+    const pct = typeof trPct === "function" ? await trPct() : trPct;
     await driveUploadSidecars(conn, rec, videoName, tr, packaged ? { folderId: first.folderId } : { folder: folderName }, false, pct);
   } catch (e) {
     out.sidecarError = e.message; // the video itself is on Drive; the extras can be sent again later
   }
   return out;
+}
+
+// How far a background transcript of this recording has got (0-100), or null when none is queued.
+// Reads what background.js keeps in storage: trQueue [{id}], trState {id, pct}.
+async function trPctFor(id) {
+  const { trQueue = [], trState } = await chrome.storage.local.get(["trQueue", "trState"]);
+  if (!trQueue.some((x) => x.id === id)) return null;
+  return trState && trState.id === id ? Math.round(trState.pct || 0) : 0;
+}
+
+// Send an uploaded recording's info file + transcript to its Drive folder again, from what is stored now.
+// Used by the background worker (transcript progress / done) and, through it, by the library.
+// Returns { ok } | { skipped: why } | { error }.
+async function driveSyncPackage(id) {
+  const { recordings = [], driveConn: conn } = await chrome.storage.local.get(["recordings", "driveConn"]);
+  const rec = recordings.find((r) => r.startedAt === id);
+  if (!rec || !rec.uploaded) return { skipped: "This recording isn't on your Drive yet" };
+  const folderId = rec.driveFolderId || ((rec.folderUrl || "").match(/\/folders\/([^/?#]+)/) || [])[1];
+  if (!folderId) return { skipped: "The Drive folder of this recording is unknown" };
+  if (!conn || !conn.url) return { skipped: "Google Drive is not connected" };
+  try {
+    const { v } = await driveScriptCall(conn, { action: "ping" });
+    if (!(v >= 2)) throw new Error(DRIVE_OLD_SCRIPT);
+    let videoName = rec.driveName;
+    if (!videoName && rec.downloadId) {
+      const [item] = await chrome.downloads.search({ id: rec.downloadId });
+      if (item && item.filename) videoName = item.filename.split(/[\\/]/).pop();
+    }
+    if (!videoName) videoName = `${rec.name}.${rec.ext === "mp4" ? "mp4" : "webm"}`;
+    const key = "tr-" + id;
+    const transcript = (await chrome.storage.local.get(key))[key] || null;
+    await driveUploadSidecars(conn, rec, videoName, transcript, { folderId }, true, await trPctFor(id));
+    return { ok: true };
+  } catch (e) {
+    return { error: e.message };
+  }
 }
 
 // ---------- Import from a Drive link (through the recipient's own connected script) ----------

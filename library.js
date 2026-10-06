@@ -1645,6 +1645,11 @@ async function loadTranscript(rec) {
   const ahead = (got.trQueue || []).findIndex((x) => x.id === id);
   const st = got.trState && got.trState.id === id ? got.trState : null;
   const state = (t) => ($("tr-state").textContent = t);
+  const note = (t) => {
+    $("tr-note").textContent = t;
+    $("tr-note").hidden = false;
+  };
+  $("tr-note").hidden = true;
   $("tr-pending").hidden = true;
   $("tr-bar").hidden = !st;
   if (st) $("tr-fill").style.width = (st.pct || 0) + "%";
@@ -1663,6 +1668,14 @@ async function loadTranscript(rec) {
     }
     renderTranscript(done.segments);
     state(done.segments && done.segments.length ? `${done.segments.length} lines` : "No speech was found.");
+    // say why there are no names, so it doesn't look broken
+    const segs = done.segments || [];
+    if (segs.length && !segs.some((x) => x.sp))
+      note(
+        rec.speakers
+          ? "Couldn't tell from Meet who was talking during this recording, so the lines have no names. Point at a line and click + Name to add one."
+          : "This recording has no speaker names: who was talking is noted while recording, and this one was made before that (or in a Meet tab that wasn't refreshed after updating the extension). Point at a line and click + Name to add one."
+      );
     $("tr-gen").textContent = "Redo";
   } else if (rec.imported && rec.imported.trStatus === "in-progress") {
     // Imported while the sender's transcript was still being made

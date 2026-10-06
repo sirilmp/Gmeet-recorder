@@ -77,15 +77,18 @@ if (window === window.top) {
 
 // ---------- who is speaking ----------
 // Meet marks every video tile with data-participant-id and writes the person's name in it. While
-// someone talks, the little sound bars in their tile are redrawn several times a second (Meet swaps
-// classes on them); a silent tile hardly changes. So the recorder counts the attribute changes inside
-// each tile and takes the busiest one as the speaker. Only changes go to the background (who, from
-// when), which keeps them next to the bookmarks; the transcript lines get their names from it later.
+// someone talks, Meet changes the classes of a few elements in their tile (the sound bars, the
+// highlight ring) and changes them back when they stop. The recorder notes for each such element the
+// class it rests in, and a tile counts as talking while an element in it is away from its resting
+// class or keeps changing. That works whether Meet redraws the bars many times a second or only flips
+// a class when talking starts and stops. Only changes go to the background (who, from when), which
+// keeps them next to the bookmarks; the transcript lines get their names from it later.
 const SPK_TICK = 400; // ms per check
-const SPK_BUSY = 3; // attribute changes per check that count as "talking"
+const SPK_WINDOW = 1200; // ms of recent changes that count
+const SPK_STUCK = 30000; // an element away from its resting class this long (with no more changes) rests there now
 let spkObserver = null;
 let spkTimer = null;
-let spkChurn = new Map(); // tile -> changes since the last check
+let spkEls = new Map(); // element -> { tile, rest: resting class, last: ms of its last change, n: recent change times }
 let spkSaid = undefined; // the name last reported (null = nobody)
 let spkNext = null; // a new name seen once: switch when it's seen twice in a row
 let spkQuiet = 0; // checks in a row with nobody talking
@@ -109,6 +112,15 @@ function tileName(tile) {
   for (const b of tile.querySelectorAll("[aria-label]")) {
     const m = /(?:options for|^Pin) (.+?)(?: to your main screen)?$/i.exec(b.getAttribute("aria-label"));
     if (m) return selfName(m[1].trim());
+  }
+  // last resort: the first short line of text in the tile that isn't an icon name ("mic_off", "more_vert")
+  const walk = document.createTreeWalker(tile, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    const t = n.nodeValue.trim();
+    if (t.length < 2 || t.length > 60 || /^[a-z0-9_]+$/.test(t)) continue;
+    const p = n.parentElement;
+    if (p && (p.closest("button, [role=button], [aria-hidden=true]") || /icon/i.test(p.className))) continue;
+    return selfName(t);
   }
   return null;
 }
@@ -135,22 +147,42 @@ function spkCheck() {
     spkTiles = tiles;
     toBackground({ type: "diag", patch: { speakerTiles: tiles } });
   }
-  // add up per person (one person can have more than one tile, or nested tile elements)
-  const byName = new Map();
-  for (const [tile, n] of spkChurn) {
-    if (!tile.isConnected) continue;
-    const name = tileName(tile);
-    if (name) byName.set(name, (byName.get(name) || 0) + n);
+  // a score per person (one person can have more than one tile, or nested tile elements)
+  const now = Date.now();
+  const byName = new Map(); // name -> { score, last }
+  const names = new Map(); // tile -> name, looked up once per check
+  for (const [e, st] of spkEls) {
+    if (!e.isConnected || !st.tile.isConnected) {
+      spkEls.delete(e);
+      continue;
+    }
+    st.n = st.n.filter((t) => now - t < SPK_WINDOW);
+    let away = st.rest !== null && attrState(e) !== st.rest;
+    if (away && now - st.last > SPK_STUCK) {
+      st.rest = attrState(e);
+      away = false;
+    }
+    // away from rest, or changing again and again (and not settled back at rest since)
+    if ((!away && (st.n.length < 2 || now - st.last > 500)) || st.hov > st.other) continue;
+    if (!names.has(st.tile)) names.set(st.tile, tileName(st.tile));
+    const name = names.get(st.tile);
+    if (!name) continue;
+    const b = byName.get(name) || { score: 0, last: 0 };
+    b.score += st.n.length + (away ? 1 : 0);
+    b.last = Math.max(b.last, st.last);
+    byName.set(name, b);
   }
-  spkChurn = new Map();
+  // the most activity wins; on a tie, whoever started changing last (they just began talking)
   let best = null;
   let most = 0;
-  for (const [name, n] of byName)
-    if (n > most) {
+  let bestLast = 0;
+  for (const [name, b] of byName)
+    if (b.score > most || (b.score === most && b.last > bestLast)) {
       best = name;
-      most = n;
+      most = b.score;
+      bestLast = b.last;
     }
-  if (most < SPK_BUSY) {
+  if (!best) {
     spkNext = null;
     // a short pause between words is not "nobody"
     if (++spkQuiet >= 4) spkReport(null, spkQuiet * SPK_TICK);
@@ -163,28 +195,57 @@ function spkCheck() {
   else spkNext = best;
 }
 
+let spkHover = new WeakMap(); // tile -> ms the mouse last went over or off it
+function spkOnMouse(e) {
+  const tile = e.target && e.target.closest && e.target.closest("[data-participant-id]");
+  if (tile) for (let t = tile; t; t = t.parentElement && t.parentElement.closest("[data-participant-id]")) spkHover.set(t, Date.now());
+}
+
+const attrState = (e) => (e.getAttribute("class") || "") + "|" + (e.getAttribute("style") || "");
+
 function spkStart() {
   spkStop();
   if (window !== window.top || !document.body) return;
   spkObserver = new MutationObserver((list) => {
+    const now = Date.now();
     for (const r of list) {
       const t = r.target;
       if (t.nodeType !== 1 || t.tagName === "VIDEO") continue;
       const tile = t.closest("[data-participant-id]");
-      // the tile itself changing (hover, layout) is not the sound bars
-      if (tile && tile !== t) spkChurn.set(tile, (spkChurn.get(tile) || 0) + 1);
+      // the tile itself changing (hover, layout) is not the sound bars, nor is the name label
+      if (!tile || tile === t || t.closest(".notranslate")) continue;
+      let st = spkEls.get(t);
+      if (!st) {
+        // first change seen: what it was before is where it rests
+        const other = r.attributeName === "class" ? "style" : "class";
+        const before = r.oldValue == null ? "" : r.oldValue;
+        const was = other === "style" ? before + "|" + (t.getAttribute("style") || "") : (t.getAttribute("class") || "") + "|" + before;
+        st = { tile, rest: was, last: now, n: [], hov: 0, other: 0 };
+        spkEls.set(t, st);
+      }
+      // the mouse moving over or off a tile changes its buttons and rings too: elements that mostly
+      // change right after that are left out
+      if (now - (spkHover.get(tile) || 0) < 600) st.hov++;
+      else st.other++;
+      st.last = now;
+      st.n.push(now);
+      if (st.n.length > 40) st.n.splice(0, st.n.length - 40);
     }
   });
-  spkObserver.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["class", "style"] });
+  document.addEventListener("mouseover", spkOnMouse, true);
+  document.addEventListener("mouseout", spkOnMouse, true);
+  spkObserver.observe(document.body, { subtree: true, attributes: true, attributeOldValue: true, attributeFilter: ["class", "style"] });
   spkTimer = setInterval(spkCheck, SPK_TICK);
 }
 
 function spkStop() {
   if (spkObserver) spkObserver.disconnect();
+  document.removeEventListener("mouseover", spkOnMouse, true);
+  document.removeEventListener("mouseout", spkOnMouse, true);
   clearInterval(spkTimer);
   spkObserver = null;
   spkTimer = null;
-  spkChurn = new Map();
+  spkEls = new Map();
   spkSaid = undefined;
   spkNext = null;
   spkQuiet = 0;

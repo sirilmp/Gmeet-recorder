@@ -162,6 +162,8 @@
     wasRec = rec;
     if (rec) hideAsk();
     $("bar").hidden = !(rec && dockOn);
+    // Pop out by itself when I switch to another tab (autopip-hook.js passes Chrome's signal on)
+    document.documentElement.dataset.mrAutopip = rec && dockOn && autoPip && canPip ? "1" : "";
     clearInterval(timer);
     if (rec) {
       const tick = () => ($("time").textContent = fmt(Date.now() - st.startedAt));
@@ -179,6 +181,7 @@
   // Chrome opens it only straight after a click on the page, and only one such window at a time.
   const canPip = "documentPictureInPicture" in window;
   let pipWin = null;
+  let pipAuto = false; // opened because I switched tabs, so it goes back when I return to Meet
   async function openPip(auto) {
     if (!canPip || pipWin) return pipWin;
     let w;
@@ -189,6 +192,7 @@
       return null;
     }
     pipWin = w;
+    pipAuto = auto;
     const doc = w.document;
     doc.title = "Meet Recorder";
     const style = doc.createElement("style");
@@ -211,6 +215,12 @@
     return w;
   }
   const closePip = () => pipWin && pipWin.close();
+  document.addEventListener("meet-recorder-autopip", () => {
+    if (!$("bar").hidden) openPip(true);
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && pipAuto) closePip();
+  });
   // Shrink the controls to fit a narrow window (or a zoomed-in Meet, whose zoom the window takes on)
   function fitPip() {
     const bar = $("bar");
@@ -245,6 +255,7 @@
   // Closing the bar hides it for this meeting only; it comes back next meeting. Settings turns it off for good.
   let closedFor = null;
   let dockOn = false; // the setting allows the bar, and it wasn't closed for this meeting
+  let autoPip = true; // pop the bar out when I switch away from the Meet tab
   $("hide").onclick = () => {
     closedFor = location.pathname;
     applyVisibility();
@@ -301,6 +312,7 @@
     const show = settings.showDock !== false && !closedFor;
     if (!host.isConnected) document.documentElement.append(host);
     dockOn = show;
+    autoPip = settings.dockAutoPip !== false;
     if (!show) closePip();
     if (settings.autoRecord === "off") hideAsk();
     sync();

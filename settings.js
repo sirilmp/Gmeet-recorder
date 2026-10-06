@@ -23,6 +23,7 @@ async function showUsage() {
 async function init() {
   const s = await getSettings();
   $("showDock").checked = s.showDock;
+  $("dockAutoPip").checked = s.dockAutoPip;
   $("autoUpload").checked = s.autoUpload;
   $("autoTranscribe").checked = s.autoTranscribe;
   $("deleteUploaded").checked = s.deleteUploaded;
@@ -38,6 +39,10 @@ async function init() {
   showUsage();
 }
 
+$("dockAutoPip").onchange = async () => {
+  await saveSettings({ dockAutoPip: $("dockAutoPip").checked });
+  saved();
+};
 $("showDock").onchange = async () => {
   await saveSettings({ showDock: $("showDock").checked });
   saved();

@@ -27,7 +27,7 @@ Icon → **My recordings & Drive upload**. Per recording: **Open** (default vide
 Scope is `drive.file` (only files this extension creates).
 
 ## Share a recording (with its transcript and notes)
-Each upload goes to its own Drive folder: `Meet Recordings / <date> / <recording> /` with the video,
+Each upload goes to its own Drive folder, named after the meeting: `Meet Recordings / <date> / <meeting> <time> /` with the video,
 `<recording> transcript.txt` and `<recording>.meetrec.json` (name, date, length, bookmarks with notes and
 the transcript). A transcript made later, or edited notes, are sent to that folder again automatically.
 1. On an uploaded recording open the Drive menu → **Who can view the folder**, or share the folder
@@ -35,6 +35,9 @@ the transcript). A transcript made later, or edited notes, are sent to that fold
 2. The other person clicks **Import** in their library and pastes the link. Their own Drive must be
    connected (that's how the extension reads folders shared with them). They can also download the
    folder from Drive and choose (or drop) the .zip instead, no Drive connection needed.
+
+Recordings uploaded with an older script sit loose in the date folder: after updating the script, the
+library offers **Put each in its own folder** (also in each recording's Drive menu).
 
 Sharing and Import need the newer Drive script: open **Connect Google Drive**, copy the code again,
 paste it over the old one, save, then Deploy → Manage deployments → ✏️ → New version → Deploy.

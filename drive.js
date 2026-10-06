@@ -104,7 +104,7 @@ const DRIVE_SCRIPT = `// Meet Recorder -> your Google Drive.
 // Runs in YOUR Google account only. It can only start uploads, and only with the key below.
 const KEY = "__KEY__";
 const ROOT = "Meet Recordings";
-const VERSION = 2; // 2: one folder per recording (video + transcript + notes), folder sharing, import from a link
+const VERSION = 3; // 2: one folder per meeting (video + transcript + notes), folder sharing, import from a link. 3: tidy older uploads
 
 function doPost(e) {
   let out;
@@ -123,6 +123,7 @@ function doPost(e) {
     else if (req.action === "share") out = shareFile(req);
     else if (req.action === "readFolder") out = readFolder(req);
     else if (req.action === "token") out = { ok: true, token: ScriptApp.getOAuthToken() };
+    else if (req.action === "tidy") out = tidyFiles(req);
     else throw new Error("Unknown action");
   } catch (err) {
     out = { ok: false, error: String(err && err.message || err) };
@@ -181,6 +182,20 @@ function readFolder(req) {
   };
   scan(dir, 1);
   return { ok: true, name: dir.getName(), packages: packages, token: ScriptApp.getOAuthToken() };
+}
+
+// Older uploads sit loose in the date folder: give the video (and its transcript / info file) a folder of its own
+function tidyFiles(req) {
+  const video = DriveApp.getFileById(req.fileId);
+  const parents = video.getParents();
+  if (!parents.hasNext()) throw new Error("The video is not in a folder");
+  const parent = parents.next();
+  const dir = folder(req.folderName, parent);
+  [video.getName()].concat(req.names || []).forEach((n) => {
+    const it = parent.getFilesByName(n);
+    while (it.hasNext()) it.next().moveTo(dir);
+  });
+  return { ok: true, folderId: dir.getId(), folderUrl: dir.getUrl(), v: VERSION };
 }
 
 function folder(name, parent) {
@@ -317,6 +332,8 @@ const PKG_VERSION = 1;
 const PKG_SUFFIX = ".meetrec.json";
 
 const pkgBase = (videoName) => videoName.replace(/\.[^.]+$/, "");
+// The meeting's folder inside the date folder: "Weekly sync 2026-10-06_10-00.mp4" -> "Weekly sync 10-00"
+const pkgFolderName = (videoName) => pkgBase(videoName).replace(/ \d{4}-\d{2}-\d{2}_(\d{2}-\d{2})(?: \(\d+\))?$/, " $1");
 
 function pkgClock(ms) {
   const s = Math.round(ms / 1000);
@@ -387,7 +404,7 @@ async function driveUploadPackage(conn, blob, rec, videoName, folderName, transc
     action: "start",
     name: videoName,
     folder: folderName,
-    path: [folderName, pkgBase(videoName)],
+    path: [folderName, pkgFolderName(videoName)],
     size: blob.size,
     mime: blob.type || "video/webm",
   });
@@ -444,6 +461,20 @@ async function driveSyncPackage(id) {
     return { ok: true };
   } catch (e) {
     return { error: e.message };
+  }
+}
+
+// Move an older upload (video loose in its date folder) and its extra files into a folder of their own.
+// Returns { folderId, folderUrl }. Needs the version 3 script.
+async function driveTidy(conn, rec, videoName) {
+  const fileId = ((rec.driveUrl || "").match(/\/d\/([^/?]+)/) || [])[1];
+  if (!fileId) throw new Error("The Drive link of this recording is missing");
+  const base = pkgBase(videoName);
+  try {
+    return await driveScriptCall(conn, { action: "tidy", fileId, folderName: pkgFolderName(videoName), names: [base + PKG_SUFFIX, `${base} transcript.txt`] });
+  } catch (e) {
+    if (/Unknown action/i.test(e.message)) throw new Error(DRIVE_OLD_SCRIPT);
+    throw e;
   }
 }
 

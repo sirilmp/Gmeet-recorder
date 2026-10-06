@@ -153,8 +153,10 @@ $("save-conn").onclick = async () => {
     const { email, v } = await driveScriptCall(conn, { action: "ping" });
     await chrome.storage.local.set({ driveConn: { ...conn, email } });
     $("script-url").value = conn.url; // may be the company (/a/macros/…) link
-    if (v >= 2) connectMsg(`Connected ✓ Uploads go to ${email || "your Drive"}`, "ok");
-    else connectMsg(`Connected to ${email || "your Drive"}, but with the older script. For sharing and Import, paste the code from step 1 over it, then Deploy → Manage deployments → ✏️ → New version → Deploy.`, "err");
+    scriptV = v || 1;
+    if (v >= DRIVE_SCRIPT_V) connectMsg(`Connected ✓ Uploads go to ${email || "your Drive"}`, "ok");
+    else connectMsg(`Connected to ${email || "your Drive"}, but with an older script, so meetings don't get their own folders. Paste the code from step 1 over it, then Deploy → Manage deployments → ✏️ → New version → Deploy.`, "err");
+    renderDriveNote();
     $("disconnect").hidden = false;
     renderDriveBtn();
   } catch (e) {
@@ -288,7 +290,8 @@ function askFolder(rec, fileName) {
   return new Promise((resolve) => {
     const d = $("dlg-upload");
     $("up-file").textContent = fileName;
-    $("up-sub").textContent = pkgBase(fileName);
+    $("up-sub").textContent = pkgFolderName(fileName);
+    $("up-old").hidden = !(scriptV != null && scriptV < 2);
     $("up-folder").value = dayName(rec.startedAt);
     $("up-where").textContent = $("up-folder").value;
     $("up-folder").oninput = () => ($("up-where").textContent = $("up-folder").value.trim());
@@ -362,7 +365,7 @@ async function uploadToDrive(rec, item) {
       toast(`"${rec.name}" is on Drive. Its transcript is still being made (${sentPct}%) and is added there when it's finished.`);
     } else if (out.sidecarError) toast(`"${rec.name}" is on Drive, but its transcript and notes were not: ${out.sidecarError}`, true);
     else if (!out.packaged) toast(`"${rec.name}" uploaded to Google Drive → ${folder}. Update your Drive script to keep each recording in its own folder.`);
-    else toast(`"${rec.name}" uploaded to Google Drive → ${folder} → ${pkgBase(fileName)}`);
+    else toast(`"${rec.name}" uploaded to Google Drive → ${folder} → ${pkgFolderName(fileName)}`);
     render();
   } catch (e) {
     uploading.delete(id);
@@ -390,6 +393,88 @@ async function syncPackage(rec, quiet) {
     if (!quiet) toast("Transcript and notes updated on Drive");
   } else if (!quiet) toast(out.skipped || `Could not update the transcript and notes on Drive: ${out.error}`, !!out.error || !!out.skipped);
   else if (out.error) toast(`Could not update the transcript and notes on Drive: ${out.error}`, true);
+}
+
+// ---------- one folder per meeting: script version + tidying older uploads ----------
+const DRIVE_SCRIPT_V = 3; // what this extension's script code says (VERSION in drive.js)
+let scriptV = null; // the connected script's version, from a ping (null: not known / not connected)
+
+async function checkScript() {
+  const conn = await getConn();
+  scriptV = null;
+  if (conn) {
+    try {
+      scriptV = (await driveScriptCall(conn, { action: "ping" })).v || 1;
+    } catch {}
+  }
+  renderDriveNote();
+}
+
+// Uploaded before each meeting got a folder: the video sits loose in its date folder
+const isLoose = (r) => r.uploaded && !r.packaged && /\/d\//.test(r.driveUrl || "");
+
+async function videoNameOf(rec) {
+  if (rec.driveName) return rec.driveName;
+  const [item] = rec.downloadId ? await search({ id: rec.downloadId }) : [];
+  return (item && item.filename.split(/[\\/]/).pop()) || `${rec.name} ${stampOf(rec.startedAt)}.${extOf(rec)}`;
+}
+
+async function renderDriveNote() {
+  const box = $("drive-note");
+  box.replaceChildren();
+  if (scriptV == null) return;
+  const row = (title, text, label, fn) => {
+    const r = el("div", "recover info", `<div class="rt"><b>${esc(title)}</b><span>${esc(text)}</span></div>`);
+    r.append(btn(ICON.cloud, label, "btn-primary", fn));
+    box.append(r);
+  };
+  if (scriptV < DRIVE_SCRIPT_V) {
+    row(
+      "Update your Drive script",
+      "Your Drive script is an older version, so recordings land loose in the date folder. With the new one, each meeting gets its own folder with its video, transcript and notes, ready to share and import.",
+      "Update script",
+      () => openConnect()
+    );
+    return;
+  }
+  const loose = (await getRecords()).filter(isLoose);
+  if (loose.length)
+    row(
+      `${loose.length} older upload${loose.length > 1 ? "s are" : " is"} loose in a date folder`,
+      "Move each into a folder named after the meeting, together with its transcript and notes.",
+      "Put each in its own folder",
+      () => organizeLoose(loose)
+    );
+}
+
+let organizing = false;
+async function organizeLoose(recs) {
+  const conn = await getConn();
+  if (!conn) return openConnect();
+  if (organizing) return;
+  organizing = true;
+  let done = 0;
+  const failed = [];
+  for (const rec of recs) {
+    toast(`Organizing Drive… ${done + 1} of ${recs.length}`);
+    try {
+      const videoName = await videoNameOf(rec);
+      const out = await driveTidy(conn, rec, videoName);
+      await updateRecord(rec.downloadId, { driveFolderId: out.folderId, folderUrl: out.folderUrl, packaged: true, driveName: videoName });
+      // the info file + transcript (made now if they weren't there), so the folder can be shared and imported
+      const synced = await bgSend({ type: "drive-sync", id: rec.startedAt });
+      if (synced && synced.error) throw new Error(synced.error);
+      done++;
+    } catch (e) {
+      failed.push(`"${rec.name}": ${e.message}`);
+      if (e.message === DRIVE_OLD_SCRIPT) break;
+    }
+  }
+  organizing = false;
+  if (failed.length) toast(`${done ? `${done} moved. ` : ""}Not moved: ${failed.join("; ")}`, true);
+  else toast(done === 1 ? `"${recs[0].name}" now has its own Drive folder` : `${done} recordings now have their own Drive folders`);
+  render();
+  renderDriveNote();
 }
 
 // ---------- UI ----------
@@ -499,6 +584,13 @@ async function openDriveMenu(anchor, rec) {
     })
   );
   if (rec.folderUrl && !folderLink) m.append(item(ICON.folder, "Open Drive folder", "", () => (window.open(rec.folderUrl, "_blank"), closeMenu())));
+  if (!rec.packaged)
+    m.append(
+      item(ICON.folder, "Put in its own folder", "With its transcript and notes", async () => {
+        closeMenu();
+        await organizeLoose([rec]);
+      })
+    );
   if (driveFolderOf(rec))
     m.append(
       item(ICON.cloud, "Update transcript & notes", "Send the latest to Drive", async () => {
@@ -1345,6 +1437,7 @@ async function playRecording(rec, item, startAt) {
 
 $("search").oninput = () => render();
 renderDriveBtn();
+checkScript();
 pruneKept().then(showRecover);
 bgSend({ type: "tr-kick" }); // carries on a transcript that was interrupted (e.g. the browser closed)
 runCleanup().then((n) => n && render()).catch(() => {});

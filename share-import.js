@@ -153,6 +153,38 @@ async function findPackages(files) {
   return { found, problems };
 }
 
+// ---------- a recording that is already in the library ----------
+// Adds the shared transcript when this copy has none, and bookmarks it doesn't have (or their notes).
+// Returns true when something was added.
+async function mergeInto(rec, meta) {
+  let changed = false;
+  const key = trKey(rec);
+  if (meta.transcript && meta.transcript.segments.length && !(await chrome.storage.local.get(key))[key]) {
+    await chrome.storage.local.set({ [key]: meta.transcript });
+    changed = true;
+  }
+  const marks = marksOf(rec);
+  for (const b of meta.bookmarks) {
+    const same = marks.find((m) => Math.abs(m.ms - b.ms) < 1000);
+    if (!same) marks.push({ ms: b.ms, note: b.note || "" });
+    else if (!same.note && b.note) same.note = b.note;
+    else continue;
+    changed = true;
+  }
+  const patch = {};
+  if (changed) {
+    marks.sort((a, b) => a.ms - b.ms);
+    patch.bookmarks = marks.map(({ ms, note }) => (note ? { ms, note } : { ms }));
+  }
+  if (rec.imported && rec.imported.trStatus === "in-progress" && meta.trStatus !== "in-progress") {
+    patch.imported = { ...rec.imported, trStatus: meta.trStatus, trPct: null };
+  } else if (rec.imported && meta.trStatus === "in-progress" && meta.trPct !== rec.imported.trPct) {
+    patch.imported = { ...rec.imported, trPct: meta.trPct };
+  }
+  if (Object.keys(patch).length) await updateRecord(rec.downloadId, patch);
+  return changed;
+}
+
 // ---------- adding one to the library ----------
 // Same path a recovered recording takes: a private copy for playing, then a download into
 // Downloads/MeetRecordings that the background adds to the list (from "saving").
@@ -235,23 +267,27 @@ async function importFound(read) {
   try {
     toast("Reading…");
     const { found, problems } = await read();
-    const have = new Set((await getRecords()).map((r) => r.startedAt));
+    const have = new Map((await getRecords()).map((r) => [r.startedAt, r]));
     const added = [];
+    const merged = [];
     const skipped = [];
     for (const pkg of found) {
-      if (have.has(pkg.meta.startedAt)) {
-        skipped.push(pkg.meta.name);
+      const mine = have.get(pkg.meta.startedAt);
+      if (mine) {
+        // Already in the library (e.g. imported before the transcript was done): add what's new
+        (await mergeInto(mine, pkg.meta)) ? merged.push(pkg.meta.name) : skipped.push(pkg.meta.name);
         continue;
       }
       await importOne(pkg, (pct) => toast(`Importing "${pkg.meta.name}"… ${pct}%`));
-      have.add(pkg.meta.startedAt);
+      have.set(pkg.meta.startedAt, true);
       added.push(pkg.meta.name);
     }
     const parts = [];
     if (added.length) parts.push(added.length === 1 ? `Imported "${added[0]}"` : `Imported ${added.length} recordings`);
+    if (merged.length) parts.push(`Added the transcript and notes to ${merged.length === 1 ? `"${merged[0]}"` : `${merged.length} recordings`} you already had`);
     if (skipped.length) parts.push(`${skipped.length === 1 ? `"${skipped[0]}" is` : `${skipped.length} recordings are`} already in your library`);
     if (problems.length) parts.push(`Not imported: ${problems.join("; ")}`);
-    toast(parts.join(". ") + ".", !added.length && !skipped.length);
+    toast(parts.join(". ") + ".", !added.length && !merged.length && !skipped.length);
     render();
   } catch (e) {
     toast(`Could not import: ${e.message}`, true);

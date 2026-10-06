@@ -119,6 +119,7 @@
     .recover .rt { flex: 1; min-width: 200px; font-size: 13px; }
     .recover .rt b { display: block; font-size: 13.5px; }
     .recover .rt span { color: var(--muted); }
+    .recover.info { border-color: var(--line, color-mix(in srgb, var(--text) 14%, transparent)); background: var(--surface); }
     .menu { position: fixed; z-index: 50; min-width: 250px; padding: 5px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-pop); display: grid; gap: 2px; }
     .menu .mi { display: flex; align-items: center; gap: 10px; text-align: left; padding: 7px 9px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
     .menu .mi:hover { background: var(--surface-2); }
@@ -268,6 +269,7 @@
           <input class="input" id="search" type="search" placeholder="Search meetings" aria-label="Search meetings">
         </div>
       </div>
+      <div id="drive-note"></div>
       <div id="recover"></div>
       <div id="list"></div>
       <div class="empty" id="empty" hidden>
@@ -445,6 +447,7 @@
         <label class="field-label" for="up-folder">Folder name</label>
         <input class="input" id="up-folder" type="text" required>
         <div class="where up-where">Saved in <b>My Drive → Meet Recordings → <span id="up-where"></span> → <span id="up-sub"></span></b> with its transcript and notes (created if it doesn't exist)</div>
+        <div class="dlg-msg err" id="up-old" hidden>Your Drive script is an older version: everything will land loose in the date folder. Update it first in Connect Google Drive.</div>
       </div>
       <div class="dlg-row">
         <button class="btn" value="cancel" formnovalidate>Cancel</button>

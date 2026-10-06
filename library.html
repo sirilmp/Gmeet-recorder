@@ -44,6 +44,7 @@
     .mark { border: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; border-radius: 5px; background: var(--warn-soft); color: var(--warn); font: 500 11.5px var(--mono); font-variant-numeric: tabular-nums; }
     .mark:hover { box-shadow: inset 0 0 0 1px var(--warn); }
     .mark svg { width: 10px; height: 10px; }
+    .mark .mn { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font); color: var(--text); opacity: .8; margin-left: 3px; }
     .actions { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
 
     /* Small status badges next to the meeting name */
@@ -129,11 +130,25 @@
     .menu .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: menuspin .7s linear infinite; }
     @keyframes menuspin { to { transform: rotate(360deg); } }
     .menu .mh { padding: 8px 9px 4px; font-size: 11.5px; font-weight: 550; color: var(--muted); border-top: 1px solid var(--border); margin-top: 4px; }
-    dialog.player { width: min(960px, 94vw); max-width: none; }
-    .pl-stage { position: relative; background: #000; border-radius: var(--radius); overflow: hidden; }
-    .pl-stage:fullscreen { border-radius: 0; display: flex; }
-    #pl-video { width: 100%; max-height: 66vh; display: block; background: #000; cursor: pointer; }
+    /* Player: video + bookmarks on the left, transcript on the right */
+    dialog.player { width: min(1240px, 96vw); max-width: none; max-height: none; height: min(780px, 92vh); }
+    dialog.player.max { width: 100vw; height: 100vh; border: 0; border-radius: 0; }
+    .pl:fullscreen { background: var(--surface); color: var(--text); }
+    .pl { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 32%, 420px); grid-template-rows: auto minmax(0, 1fr); }
+    .pl-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 4px; padding: 14px 14px 14px 22px; border-bottom: 1px solid var(--border); }
+    .pl-titles { flex: 1; min-width: 0; }
+    .pl-head h2 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pl-head .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+    .pl-head .btn { height: 32px; }
+    .pl-ib { width: 32px; padding: 0; }
+    .pl-main { min-height: 0; overflow: auto; padding: 18px 20px 20px 22px; display: flex; flex-direction: column; gap: 14px; }
+    .pl-main > .dlg-msg:empty { display: none; }
+    .pl-stage { position: relative; flex: none; background: #000; border-radius: var(--radius); overflow: hidden; }
+    #pl-video { width: 100%; max-height: calc(92vh - 300px); min-height: 180px; display: block; background: #000; cursor: pointer; }
+    dialog.player.max #pl-video, .pl:fullscreen #pl-video { max-height: calc(100vh - 260px); }
     .pl-stage:fullscreen #pl-video { max-height: none; height: 100%; }
+    .pl-side { min-height: 0; border-left: 1px solid var(--border); background: color-mix(in srgb, var(--surface-2) 40%, var(--surface)); padding: 16px 14px 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+    .pl-stage:fullscreen { border-radius: 0; display: flex; }
     .pl-ctl { position: absolute; left: 0; right: 0; bottom: 0; padding: 26px 12px 8px; color: #fff;
       background: linear-gradient(transparent, rgba(0,0,0,.78)); transition: opacity .2s; }
     .pl-stage.idle .pl-ctl { opacity: 0; pointer-events: none; } .pl-stage.idle { cursor: none; }
@@ -156,26 +171,51 @@
     .pl-cap span { display: inline-block; max-width: 100%; padding: 4px 10px; border-radius: 6px; background: rgba(0,0,0,.72); color: #fff; font: 500 17px/1.35 var(--font); }
     .pl-stage:fullscreen .pl-cap span { font-size: 26px; }
     .pb.txt.on { background: rgba(255,255,255,.9); color: #000; }
-    .tr { display: grid; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
-    .tr-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .tr-head { min-height: 30px; } .tr-head > b { font-weight: 600; }
-    .tr-head .btn { height: 30px; padding: 0 11px; font-size: 12.5px; }
     .tr-state { color: var(--muted); font-size: 12.5px; }
     .tr-bar { height: 3px; border-radius: 3px; background: var(--border); overflow: hidden; }
     .tr-bar i { display: block; height: 100%; width: 0; background: var(--primary); transition: width .3s; }
-    .tr-list { max-height: 210px; overflow: auto; display: grid; gap: 2px; font-size: 13.5px; line-height: 1.45; }
     .tr-line { display: flex; gap: 12px; padding: 5px 8px; border-radius: 6px; cursor: pointer; }
     .tr-line:hover { background: var(--surface-2); }
     .tr-line.on { background: var(--primary-soft); box-shadow: inset 2px 0 0 var(--text); }
-    .tr-line b { flex: none; width: 56px; color: var(--muted); font: 500 12px/1.75 var(--mono); }
+    .tr-line b { flex: none; width: 58px; color: var(--muted); font: 500 12px/1.75 var(--mono); }
     .pl-big { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px; border-radius: 50%; background: rgba(0,0,0,.55);
       display: grid; place-items: center; color: #fff; pointer-events: none; animation: plpop .55s forwards; }
     .pl-big svg { width: 30px; height: 30px; }
     @keyframes plpop { to { opacity: 0; transform: scale(1.35); } }
-    .pl-marks { display: flex; gap: 6px; flex-wrap: wrap; }
-    .pl-marks button { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; border-radius: 5px; background: var(--warn-soft); color: var(--warn); font: 500 11.5px var(--mono); }
-    .pl-marks button:hover { box-shadow: inset 0 0 0 1px var(--warn); }
-    .pl-marks svg { width: 11px; height: 11px; }
+    .tr-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 30px; }
+    .tr-head > b, .bm-head > b { font-weight: 600; font-size: 13.5px; }
+    .tr-head .btn, .bm-head .btn { height: 28px; padding: 0 10px; font-size: 12.5px; }
+    .tr-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 2px; margin: 0 -6px; font-size: 13.5px; line-height: 1.5; }
+    .tr-empty, .bm-empty { color: var(--muted); font-size: 12.5px; }
+
+    /* Bookmarks with notes */
+    .bm { display: grid; gap: 8px; }
+    .bm-head { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+    .bm-head .spacer { flex: 1; }
+    #bm-add svg { width: 13px; height: 13px; color: var(--warn); }
+    #bm-add span { font: 500 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+    .bm-list { display: grid; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .bm-list:empty { display: none; }
+    .bm-row { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 8px; background: var(--surface); }
+    .bm-row + .bm-row { border-top: 1px solid var(--border); }
+    .bm-time { all: unset; cursor: pointer; flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 7px; border-radius: 5px; background: var(--warn-soft); color: var(--warn); font: 500 12px var(--mono); font-variant-numeric: tabular-nums; }
+    .bm-time:hover { box-shadow: inset 0 0 0 1px var(--warn); }
+    .bm-time:focus-visible { box-shadow: 0 0 0 3px var(--focus); }
+    .bm-time svg { width: 11px; height: 11px; }
+    .bm-note { flex: 1; min-width: 0; height: 30px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 13px; padding: 0 8px; }
+    .bm-note::placeholder { color: var(--faint); }
+    .bm-note:hover { border-color: var(--border); }
+    .bm-note:focus { outline: none; border-color: var(--border-strong); background: var(--surface); box-shadow: 0 0 0 3px var(--focus); }
+    .bm-del { width: 28px; height: 28px; padding: 0; color: var(--faint); }
+    .bm-del svg { width: 14px; height: 14px; }
+
+    @media (max-width: 860px) {
+      dialog.player { height: 94vh; }
+      .pl { grid-template-columns: 1fr; grid-template-rows: auto auto minmax(0, 1fr); overflow: auto; }
+      .pl-main { overflow: visible; }
+      .pl-side { border-left: 0; border-top: 1px solid var(--border); min-height: 320px; }
+      #pl-sys { display: none; }
+    }
     .dlg-row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
     .dlg-row .spacer { flex: 1; }
     .dlg-msg { font-size: 13px; min-height: 18px; }
@@ -310,35 +350,52 @@
   </dialog>
 
   <dialog id="dlg-player" class="player">
-    <div class="dlg">
-      <h2 id="pl-title"></h2>
-      <div class="sub" id="pl-sub"></div>
-      <div class="pl-stage" id="pl-stage">
-        <video id="pl-video" preload="metadata" playsinline></video>
-        <div class="pl-big" id="pl-big" hidden></div>
-        <div class="pl-cap" id="pl-cap" hidden></div>
-        <div class="pl-ctl" id="pl-ctl">
-          <div class="pl-seek" id="pl-seek" title="Seek">
-            <div class="pl-buf" id="pl-buf"></div><div class="pl-fill" id="pl-fill"></div><div class="pl-ticks" id="pl-ticks"></div><div class="pl-knob" id="pl-knob"></div>
-          </div>
-          <div class="pl-row">
-            <button type="button" class="pb" id="pl-play" title="Play / Pause (Space)"></button>
-            <button type="button" class="pb" id="pl-back" title="Back 10 seconds (Left arrow)"></button>
-            <button type="button" class="pb" id="pl-fwd" title="Forward 10 seconds (Right arrow)"></button>
-            <span class="pl-time" id="pl-time">0:00 / 0:00</span>
-            <span class="pl-sp"></span>
-            <button type="button" class="pb" id="pl-mute" title="Mute (M)"></button>
-            <input type="range" id="pl-vol" min="0" max="1" step="0.05" value="1" title="Volume">
-            <button type="button" class="pb txt" id="pl-cc" title="Captions (C)" hidden>CC</button>
-            <button type="button" class="pb txt" id="pl-rate" title="Playback speed">1×</button>
-            <button type="button" class="pb" id="pl-pip" title="Picture in picture"></button>
-            <button type="button" class="pb" id="pl-full" title="Full screen (F)"></button>
+    <div class="pl">
+      <header class="pl-head">
+        <div class="pl-titles">
+          <h2 id="pl-title"></h2>
+          <div class="sub" id="pl-sub"></div>
+        </div>
+        <button type="button" class="btn btn-ghost" id="pl-sys">Open in system player</button>
+        <button type="button" class="btn btn-ghost pl-ib" id="pl-max" title="Full screen with transcript"></button>
+        <button type="button" class="btn btn-ghost pl-ib" id="pl-close" title="Close (Esc)" aria-label="Close"></button>
+      </header>
+      <div class="pl-main">
+        <div class="pl-stage" id="pl-stage">
+          <video id="pl-video" preload="metadata" playsinline></video>
+          <div class="pl-big" id="pl-big" hidden></div>
+          <div class="pl-cap" id="pl-cap" hidden></div>
+          <div class="pl-ctl" id="pl-ctl">
+            <div class="pl-seek" id="pl-seek" title="Seek">
+              <div class="pl-buf" id="pl-buf"></div><div class="pl-fill" id="pl-fill"></div><div class="pl-ticks" id="pl-ticks"></div><div class="pl-knob" id="pl-knob"></div>
+            </div>
+            <div class="pl-row">
+              <button type="button" class="pb" id="pl-play" title="Play / Pause (Space)"></button>
+              <button type="button" class="pb" id="pl-back" title="Back 10 seconds (Left arrow)"></button>
+              <button type="button" class="pb" id="pl-fwd" title="Forward 10 seconds (Right arrow)"></button>
+              <span class="pl-time" id="pl-time">0:00 / 0:00</span>
+              <span class="pl-sp"></span>
+              <button type="button" class="pb" id="pl-mark" title="Bookmark this moment (B)"></button>
+              <button type="button" class="pb" id="pl-mute" title="Mute (M)"></button>
+              <input type="range" id="pl-vol" min="0" max="1" step="0.05" value="1" title="Volume">
+              <button type="button" class="pb txt" id="pl-cc" title="Captions (C)" hidden>CC</button>
+              <button type="button" class="pb txt" id="pl-rate" title="Playback speed">1×</button>
+              <button type="button" class="pb" id="pl-pip" title="Picture in picture"></button>
+              <button type="button" class="pb" id="pl-full" title="Video only, full screen (F)"></button>
+            </div>
           </div>
         </div>
+        <div class="dlg-msg err" id="pl-msg"></div>
+        <section class="bm">
+          <div class="bm-head">
+            <b>Bookmarks</b><span class="tr-state" id="bm-count"></span><span class="spacer"></span>
+            <button type="button" class="btn" id="bm-add" title="Bookmark this moment (B)"></button>
+          </div>
+          <div class="bm-empty" id="bm-empty">Mark a moment to come back to it, and add a note so you remember why.</div>
+          <div class="bm-list" id="bm-list"></div>
+        </section>
       </div>
-      <div class="pl-marks" id="pl-marks" hidden></div>
-      <div class="dlg-msg err" id="pl-msg"></div>
-      <section class="tr" id="tr">
+      <aside class="pl-side tr" id="tr">
         <div class="tr-head">
           <b>Transcript</b><span class="tr-state" id="tr-state"></span><span class="spacer"></span>
           <button type="button" class="btn" id="tr-copy" hidden>Copy</button>
@@ -347,13 +404,9 @@
           <button type="button" class="btn btn-primary" id="tr-gen">Generate transcript</button>
         </div>
         <div class="tr-bar" id="tr-bar" hidden><i id="tr-fill"></i></div>
+        <div class="tr-empty" id="tr-empty">Generate a transcript to read along here. It runs on this PC, nothing is uploaded.</div>
         <div class="tr-list" id="tr-list" hidden></div>
-      </section>
-      <div class="dlg-row">
-        <span class="spacer"></span>
-        <button type="button" class="btn" id="pl-sys">Open in system player</button>
-        <button type="button" class="btn btn-primary" id="pl-close">Close</button>
-      </div>
+      </aside>
     </div>
   </dialog>
 

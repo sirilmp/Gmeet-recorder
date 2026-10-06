@@ -376,7 +376,7 @@ async function syncPackage(rec, quiet) {
     await driveUploadSidecars(conn, rec, videoName, await storedTranscript(rec), { folderId }, true);
     if (!quiet) toast("Transcript and notes updated on Drive");
   } catch (e) {
-    // Quiet syncs only complain when the script needs updating or something real failed
+    // Quiet syncs still say so when they fail (e.g. the script needs updating)
     toast(`Could not update the transcript and notes on Drive: ${e.message}`, true);
   }
 }

@@ -19,6 +19,16 @@ the extension, and uploads to Google Drive on demand. No backend required.
 Icon → **My recordings & Drive upload**. Per recording: **Open** (default video player),
 **Show in folder**, **Upload to Drive**, **Delete**. Uploaded items get an "On Drive" badge and a link.
 
+## Who said what
+While recording, the extension watches Meet's video tiles and notes who is talking (the sound bars in a
+person's tile move while they speak). The transcript lines then start with that name, e.g.
+`[00:01:04] Sweta: …`, in the player, the captions, Copy, the .txt / .vtt files and on Drive. The popup's
+Live status shows who it sees speaking right now.
+- It only sees people whose tile is on screen, so in a big call with hidden tiles some lines stay unnamed.
+  Two people talking at once get one name.
+- In the player, click a name to change it (for all of that person's lines at once, e.g. "You" → your
+  name), or hover a line without one and click **+ Name**.
+
 ## Google Drive setup (one time)
 1. Google Cloud Console → new project → enable **Google Drive API**.
 2. OAuth consent screen → add yourself as a test user.

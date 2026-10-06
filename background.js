@@ -37,7 +37,7 @@ async function setState(recording, startedAt = null) {
     }
   }
   await chrome.action.setBadgeText({ text: recording ? "REC" : "" });
-  await chrome.action.setBadgeBackgroundColor({ color: "#d93025" });
+  await chrome.action.setBadgeBackgroundColor({ color: "#e5484d" });
 }
 
 function safeName(name) {
@@ -172,7 +172,7 @@ async function flashBadge(text, color = "#1a73e8") {
   setTimeout(async () => {
     const { recording } = await chrome.storage.session.get("recording");
     await chrome.action.setBadgeText({ text: recording ? "REC" : "" });
-    await chrome.action.setBadgeBackgroundColor({ color: "#d93025" });
+    await chrome.action.setBadgeBackgroundColor({ color: "#e5484d" });
   }, 1800);
 }
 

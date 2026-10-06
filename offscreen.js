@@ -109,6 +109,35 @@ async function switchMic(micId) {
   }
 }
 
+// ---------- speaker the meeting sound is played to (follows Meet's speaker setting)
+let meetSpeakerLabel = ""; // "" = system default
+
+async function applySpeaker() {
+  const out = tabOutEl || tabOutCtx;
+  if (!out || typeof out.setSinkId !== "function") return;
+  let id = "";
+  if (meetSpeakerLabel) {
+    try {
+      const bare = (l) => l.replace(/^(Default|Communications) - /, "");
+      const outs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput");
+      const hit =
+        outs.find((d) => d.label === meetSpeakerLabel) || outs.find((d) => bare(d.label) === bare(meetSpeakerLabel));
+      id = hit ? hit.deviceId : "";
+    } catch {
+      /* system default */
+    }
+  }
+  try {
+    if (out.sinkId !== id) await out.setSinkId(id);
+    diag({ output: id ? meetSpeakerLabel : "default" });
+  } catch (e) {
+    console.warn("Could not play the meeting sound on", meetSpeakerLabel, e);
+    diag({ output: `FAILED (${e.name}), using default` });
+  }
+}
+// A Bluetooth headset reconnecting or switching to its call mode can change its device ids
+navigator.mediaDevices.addEventListener("devicechange", () => applySpeaker());
+
 // Live status shown in the popup (mic / audio engine / screen share)
 function diag(patch) {
   chrome.runtime.sendMessage({ target: "background", type: "diag", patch }).catch(() => {});
@@ -221,6 +250,12 @@ async function onShareSignal(m, tabId) {
     meetMuted = m.muted;
     diag({ micMuted: m.muted });
     if (micGain) micGain.gain.value = meetMuted ? 0 : 1;
+    return;
+  }
+  if (m.kind === "meet-speaker") {
+    // Meet plays the call to this speaker: play the meeting sound there too ("" = system default)
+    meetSpeakerLabel = m.label || "";
+    applySpeaker();
     return;
   }
   if (m.kind === "meet-mic") {
@@ -399,6 +434,7 @@ async function startRecording(streamId, desktopStreamId, useMic, desktopAudio, m
   if (silentSink && tabStream.getAudioTracks().length) {
     tabOutEl = new Audio();
     tabOutEl.srcObject = new MediaStream(tabStream.getAudioTracks());
+    applySpeaker();
     tabOutEl.play().catch((e) => {
       // Shouldn't happen on an extension page; if it does, play through Web Audio as before
       console.warn("Meeting sound playback failed, using Web Audio:", e);
@@ -406,6 +442,7 @@ async function startRecording(streamId, desktopStreamId, useMic, desktopAudio, m
       tabOutCtx = new AudioContext({ latencyHint: "playback" });
       tabOutCtx.createMediaStreamSource(tabStream).connect(tabOutCtx.destination);
       tabOutCtx.resume().catch(() => {});
+      applySpeaker();
     });
   } else {
     tabSource.connect(audioCtx.destination);

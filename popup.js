@@ -67,6 +67,12 @@ async function renderDiag() {
   else if (diag.shareAudio === "pending") row("idle", "Share sound", "Connecting…");
   else if (diag.shareAudio === "none") row("bad", "Share sound", "None", "", "", "Tick “Share tab audio” when presenting.");
 
+  // Collapsed header: "All good", or how many things need a look
+  const bad = rows.filter((r) => r.startsWith('<div class="st bad"')).length;
+  const sum = $("diag-sum");
+  sum.textContent = bad ? `${bad} need${bad > 1 ? "" : "s"} attention` : rows.some((r) => r.startsWith('<div class="st ok"')) ? "All good" : "Starting…";
+  sum.className = bad ? "bad" : rows.some((r) => r.startsWith('<div class="st ok"')) ? "ok" : "";
+
   const html = rows.join("");
   if ($("diag-lines").innerHTML !== html) $("diag-lines").innerHTML = html; // don't restart the wave needlessly
 }

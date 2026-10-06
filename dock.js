@@ -115,21 +115,24 @@
   }
 
   // ---- position (remembered; stays on screen) ----
+  // The remembered spot is kept as it is; a smaller window only pulls the bar in while it's small
   let pos = { x: 20, y: 80 };
+  const onScreen = (p) => ({
+    x: Math.min(Math.max(0, p.x), Math.max(0, innerWidth - (host.offsetWidth || 220))),
+    y: Math.min(Math.max(0, p.y), Math.max(0, innerHeight - (host.offsetHeight || 44))),
+  });
   function place() {
-    const w = host.offsetWidth || 220;
-    const h = host.offsetHeight || 44;
-    pos.x = Math.min(Math.max(0, pos.x), Math.max(0, innerWidth - w));
-    pos.y = Math.min(Math.max(0, pos.y), Math.max(0, innerHeight - h));
-    host.style.left = pos.x + "px";
-    host.style.top = pos.y + "px";
+    const p = onScreen(pos);
+    host.style.left = p.x + "px";
+    host.style.top = p.y + "px";
   }
   $("grip").addEventListener("pointerdown", (e) => {
     e.preventDefault();
-    const dx = e.clientX - pos.x;
-    const dy = e.clientY - pos.y;
+    const at = onScreen(pos);
+    const dx = e.clientX - at.x;
+    const dy = e.clientY - at.y;
     const move = (ev) => {
-      pos = { x: ev.clientX - dx, y: ev.clientY - dy };
+      pos = onScreen({ x: ev.clientX - dx, y: ev.clientY - dy });
       place();
     };
     const up = () => {
@@ -181,12 +184,18 @@
   // Chrome opens it only straight after a click on the page, and only one such window at a time.
   const canPip = "documentPictureInPicture" in window;
   let pipWin = null;
+  let pipSize = { w: 360, h: 64 }; // the pop-out's size, as I last resized it (read once at the start, so
+  // opening the window doesn't wait on storage and miss Chrome's short "just clicked" allowance)
+  let reqSize = null;
   let pipAuto = false; // opened because I switched tabs, so it goes back when I return to Meet
   async function openPip(auto) {
     if (!canPip || pipWin) return pipWin;
     let w;
     try {
-      w = await documentPictureInPicture.requestWindow({ width: 360, height: 64 });
+      // At the size I last gave it. Within a tab Chrome also puts it back where I last moved it, as long
+      // as each request asks for the same size, so the tab's first request is repeated.
+      reqSize = reqSize || pipSize;
+      w = await documentPictureInPicture.requestWindow({ width: Math.max(160, reqSize.w), height: Math.max(40, reqSize.h) });
     } catch (e) {
       if (!auto) note("Couldn't pop out the bar: click the pop-out button again.", false);
       return null;
@@ -203,7 +212,16 @@
     doc.body.append($("bar"), $("note"));
     $("pip").title = "Put this bar back on the Meet page";
     w.addEventListener("keydown", markKey, true);
-    w.addEventListener("resize", fitPip);
+    let sizeTimer;
+    w.addEventListener("resize", () => {
+      fitPip();
+      clearTimeout(sizeTimer);
+      sizeTimer = setTimeout(() => {
+        if (w.closed || !w.innerWidth || !w.innerHeight) return;
+        pipSize = { w: w.innerWidth, h: w.innerHeight };
+        chrome.storage.local.set({ pipSize });
+      }, 400);
+    });
     fitPip();
     w.addEventListener("pagehide", () => {
       if (pipWin !== w) return;
@@ -319,11 +337,13 @@
   }
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.settings) applyVisibility();
+    if (area === "local" && changes.pipSize && changes.pipSize.newValue) pipSize = changes.pipSize.newValue;
     if (area === "session") sync();
   });
 
-  chrome.storage.local.get("dockPos").then(({ dockPos }) => {
+  chrome.storage.local.get(["dockPos", "pipSize"]).then(({ dockPos, pipSize: size }) => {
     if (dockPos) pos = dockPos;
+    if (size && size.w > 0 && size.h > 0) pipSize = size;
     applyVisibility();
   });
 })();

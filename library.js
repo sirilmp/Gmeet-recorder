@@ -703,7 +703,7 @@ async function buildCard(rec) {
     ob.title = "Play recording";
     actions.append(ob);
     // Only while there is no transcript yet and none is being made (paintTrChips keeps this in sync)
-    const tb = btn(ICON.text, "Transcribe", "", () => transcribeFromCard(rec, item, tb));
+    const tb = btn(ICON.text, "", "", () => transcribeFromCard(rec, item, tb));
     tb.title = "Make a transcript";
     tb.dataset.trbtn = rec.startedAt;
     tb.hidden = true;

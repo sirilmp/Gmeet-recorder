@@ -327,9 +327,16 @@ function pkgMarks(rec) {
   return (rec.bookmarks || []).map((b) => (typeof b === "number" ? { ms: b, note: "" } : { ms: b.ms, note: b.note || "" }));
 }
 
-// transcript: what the library stores as tr-<startedAt> ({ model, lang, at, segments }) or null
-function pkgMeta(rec, videoName, transcript, by) {
+// transcript: what the library stores as tr-<startedAt> ({ model, lang, at, segments }) or null.
+// trPct: how far a transcript that is being made right now has got (0-100), else null.
+function pkgTrStatus(transcript, trPct) {
+  if (transcript && transcript.segments && transcript.segments.length) return "done";
+  return trPct != null ? "in-progress" : "none";
+}
+
+function pkgMeta(rec, videoName, transcript, by, trPct) {
   const segs = transcript && transcript.segments && transcript.segments.length ? transcript : null;
+  const status = pkgTrStatus(transcript, trPct);
   return {
     format: PKG_FORMAT,
     version: PKG_VERSION,
@@ -343,22 +350,27 @@ function pkgMeta(rec, videoName, transcript, by) {
     size: rec.size,
     recordedBy: (rec.imported && rec.imported.by) || by || null,
     bookmarks: pkgMarks(rec),
+    transcriptStatus: status, // done | in-progress | none
+    transcriptProgress: status === "in-progress" ? Math.round(trPct) : status === "done" ? 100 : null,
     transcript: segs ? { model: segs.model || null, lang: segs.lang || null, at: segs.at || null, segments: segs.segments } : null,
     exportedAt: new Date().toISOString(),
   };
 }
 
-function pkgTranscriptText(rec, segments) {
+function pkgTranscriptText(rec, segments, trPct) {
   const head = `${rec.name}\nRecorded ${new Date(rec.startedAt).toLocaleString()} · ${pkgClock(rec.durationMs || 0)}\n\n`;
+  if (!segments) return head + `Transcript in progress (${Math.round(trPct)}% done). This file is replaced when it's finished.\n`;
   return head + segments.map((x) => `[${pkgClock(x.s * 1000)}] ${x.t}`).join("\n") + "\n";
 }
 
 // Upload the small files next to the video. where = { folderId } (newer script) or { folder } (older one).
-async function driveUploadSidecars(conn, rec, videoName, transcript, where, replace) {
+// While a transcript is being made (trPct set) the .txt says so, and is replaced once it's done.
+async function driveUploadSidecars(conn, rec, videoName, transcript, where, replace, trPct = null) {
   const base = pkgBase(videoName);
-  const files = [[base + PKG_SUFFIX, "application/json", JSON.stringify(pkgMeta(rec, videoName, transcript, conn.email), null, 2)]];
-  if (transcript && transcript.segments && transcript.segments.length)
-    files.push([`${base} transcript.txt`, "text/plain", pkgTranscriptText(rec, transcript.segments)]);
+  const status = pkgTrStatus(transcript, trPct);
+  const files = [[base + PKG_SUFFIX, "application/json", JSON.stringify(pkgMeta(rec, videoName, transcript, conn.email, trPct), null, 2)]];
+  if (status !== "none")
+    files.push([`${base} transcript.txt`, "text/plain", pkgTranscriptText(rec, status === "done" ? transcript.segments : null, trPct)]);
   for (const [name, mime, text] of files) {
     const blob = new Blob([text], { type: mime });
     const { uploadUrl } = await driveScriptCall(conn, { action: "start", name, size: blob.size, mime, replace: !!replace, ...where });
@@ -366,10 +378,10 @@ async function driveUploadSidecars(conn, rec, videoName, transcript, where, repl
   }
 }
 
-// Video first (with progress), then the transcript + notes. A newer script puts all of it in its own
+// Video first (with progress), then the transcript + notes (transcript / trPct may be functions). A newer script puts all of it in its own
 // folder; an older one ignores "path" and puts everything in <folder> like before.
 // Returns { fileUrl, folderUrl, folderId, packaged, sidecarError }.
-async function driveUploadPackage(conn, blob, rec, videoName, folderName, transcript, onProgress) {
+async function driveUploadPackage(conn, blob, rec, videoName, folderName, transcript, onProgress, trPct = null) {
   const first = await driveScriptCall(conn, {
     action: "start",
     name: videoName,
@@ -388,7 +400,10 @@ async function driveUploadPackage(conn, blob, rec, videoName, folderName, transc
     sidecarError: null,
   };
   try {
-    await driveUploadSidecars(conn, rec, videoName, transcript, packaged ? { folderId: first.folderId } : { folder: folderName }, false);
+    // Read the transcript state now, after the (long) video upload: it may have moved on meanwhile
+    const tr = typeof transcript === "function" ? await transcript() : transcript;
+    const pct = typeof trPct === "function" ? trPct() : trPct;
+    await driveUploadSidecars(conn, rec, videoName, tr, packaged ? { folderId: first.folderId } : { folder: folderName }, false, pct);
   } catch (e) {
     out.sidecarError = e.message; // the video itself is on Drive; the extras can be sent again later
   }

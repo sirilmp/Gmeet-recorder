@@ -87,7 +87,10 @@ function cleanMeta(raw) {
   const startedAt = num(raw.startedAt, Date.parse(raw.recordedAt) || 0);
   if (!startedAt) return null;
   const tr = raw.transcript && Array.isArray(raw.transcript.segments) ? raw.transcript : null;
+  const trStatus = tr && tr.segments.length ? "done" : raw.transcriptStatus === "in-progress" ? "in-progress" : "none";
   return {
+    trStatus,
+    trPct: trStatus === "in-progress" ? Math.min(100, Math.max(0, Math.round(num(raw.transcriptProgress)))) : null,
     name: str(raw.name, 200).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "-").trim() || "Meeting",
     startedAt,
     durationMs: Math.max(0, num(raw.durationMs)),
@@ -153,7 +156,7 @@ async function findPackages(files) {
 // ---------- adding one to the library ----------
 // Same path a recovered recording takes: a private copy for playing, then a download into
 // Downloads/MeetRecordings that the background adds to the list (from "saving").
-async function importOne({ meta, video }, onProgress) {
+async function importOne({ meta, video, source }, onProgress) {
   const ext = meta.ext || (/\.mp4$/i.test(video.path) ? "mp4" : "webm");
   const root = await navigator.storage.getDirectory();
   const keepName = `keep-${meta.startedAt}.${ext}`;
@@ -196,7 +199,12 @@ async function importOne({ meta, video }, onProgress) {
       filename: `${meta.name} ${stampOf(meta.startedAt)}.${ext}`,
       ext,
       bookmarks: meta.bookmarks,
-      imported: { at: Date.now(), by: meta.by },
+      imported: {
+        at: Date.now(),
+        by: meta.by,
+        ...(meta.trStatus === "in-progress" ? { trStatus: "in-progress", trPct: meta.trPct } : {}),
+        ...(source ? { source } : {}), // the Drive folder it came from, to fetch a transcript finished later
+      },
     },
   });
   const url = URL.createObjectURL(new Blob([kept], { type: `video/${ext}` }));
@@ -267,7 +275,12 @@ async function readDriveLink(conn, link) {
     }
     const v = p.videos.find((x) => x.name === meta.video) || (p.videos.length === 1 ? p.videos[0] : null);
     if (!v) problems.push(`the video of "${meta.name}" is not in the folder`);
-    else found.push({ meta, video: { path: v.name, size: v.size, open: async () => driveFileStream(conn, v.id, v.size, token) } });
+    else
+      found.push({
+        meta,
+        source: driveLinkId(link),
+        video: { path: v.name, size: v.size, open: async () => driveFileStream(conn, v.id, v.size, token) },
+      });
   }
   if (!packages.length) problems.push(`"${name || "that folder"}" has no Meet Recorder recording in it`);
   return { found, problems };
@@ -299,6 +312,48 @@ async function importLink() {
   }
   $("imp-go").disabled = false;
 }
+
+// ---------- a transcript the sender finished after you imported ----------
+async function fetchSharedTranscript(rec) {
+  const conn = await getConn();
+  if (!conn) {
+    toast("Connect your Google Drive first, then try again");
+    return openConnect();
+  }
+  $("tr-fetch").disabled = true;
+  $("tr-state").textContent = "Checking Drive…";
+  try {
+    const { packages = [] } = await driveReadShared(conn, rec.imported.source);
+    let meta = null;
+    for (const p of packages) {
+      try {
+        const m = cleanMeta(JSON.parse(p.meta));
+        if (m && m.startedAt === rec.startedAt) meta = m;
+      } catch {}
+    }
+    if (!meta) throw new Error("this recording is no longer in that Drive folder");
+    if (meta.transcript && meta.transcript.segments.length) {
+      await chrome.storage.local.set({ [trKey(rec)]: meta.transcript });
+      rec.imported = { ...rec.imported, trStatus: "done", trPct: 100 };
+      await updateRecord(rec.downloadId, { imported: rec.imported });
+      toast("Got the finished transcript");
+      if (playerRec === rec) loadTranscript(rec);
+      render();
+    } else {
+      const pct = meta.trStatus === "in-progress" ? meta.trPct : null;
+      rec.imported = { ...rec.imported, trStatus: pct != null ? "in-progress" : "none", trPct: pct };
+      await updateRecord(rec.downloadId, { imported: rec.imported });
+      if (playerRec === rec) loadTranscript(rec);
+      $("tr-state").textContent = pct != null ? `Still being made (${pct}%). Try again later.` : "The sender has no transcript for it.";
+      render();
+    }
+  } catch (e) {
+    $("tr-state").textContent = "";
+    toast(`Could not check Drive: ${e.message}`, true);
+  }
+  $("tr-fetch").disabled = false;
+}
+$("tr-fetch").onclick = () => playerRec && fetchSharedTranscript(playerRec);
 
 // ---------- the Import button, dialog and drag & drop ----------
 $("import-btn").onclick = () => {

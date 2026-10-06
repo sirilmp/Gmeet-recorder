@@ -323,10 +323,19 @@ async function uploadToDrive(rec, item) {
     const blob = await readLocalFile(rec, item);
     uploading.set(id, 0);
     showProgress(id);
-    const out = await driveUploadPackage(conn, blob, rec, fileName, folder, await storedTranscript(rec), (p) => {
-      uploading.set(id, p);
-      showProgress(id);
-    });
+    const out = await driveUploadPackage(
+      conn,
+      blob,
+      rec,
+      fileName,
+      folder,
+      () => storedTranscript(rec),
+      (p) => {
+        uploading.set(id, p);
+        showProgress(id);
+      },
+      () => trPctOf(rec)
+    );
     uploading.delete(id);
     if (conn.url !== oldUrl) await chrome.storage.local.set({ driveConn: conn });
     await updateRecord(id, {
@@ -338,7 +347,11 @@ async function uploadToDrive(rec, item) {
       driveName: fileName,
     });
     dropKept(rec);
-    if (out.sidecarError) toast(`"${rec.name}" is on Drive, but its transcript and notes were not: ${out.sidecarError}`, true);
+    const pct = trPctOf(rec);
+    if (pct != null && !out.sidecarError) {
+      trToldDrive.set(rec.startedAt, Math.floor(pct / 25) * 25);
+      toast(`"${rec.name}" is on Drive. Its transcript is still being made (${pct}%) and is added there when it's finished.`);
+    } else if (out.sidecarError) toast(`"${rec.name}" is on Drive, but its transcript and notes were not: ${out.sidecarError}`, true);
     else if (!out.packaged) toast(`"${rec.name}" uploaded to Google Drive → ${folder}. Update your Drive script to keep each recording in its own folder.`);
     else toast(`"${rec.name}" uploaded to Google Drive → ${folder} → ${pkgBase(fileName)}`);
     render();
@@ -360,8 +373,18 @@ const storedTranscript = async (rec) => (await chrome.storage.local.get(trKey(re
 // The Drive folder that holds this recording (its own folder, or the date folder for older uploads)
 const driveFolderOf = (rec) => rec.driveFolderId || ((rec.folderUrl || "").match(/\/folders\/([^/?#]+)/) || [])[1] || null;
 
-// Send the transcript + notes to Drive again (after a new transcript or edited bookmarks)
-async function syncPackage(rec, quiet) {
+// Send the transcript + notes to Drive again (after a new transcript, its progress, or edited bookmarks).
+// Runs one at a time, so an older "in progress" update can never land after the finished one.
+let syncChain = Promise.resolve();
+let toldOldScript = false;
+function syncPackage(rec, quiet) {
+  const run = syncChain.then(() => syncPackageNow(rec, quiet));
+  syncChain = run.catch(() => {});
+  return run;
+}
+async function syncPackageNow(rec, quiet) {
+  // The stored record is the truth (the player's copy can miss an upload that finished meanwhile)
+  rec = (await getRecords()).find((x) => x.startedAt === rec.startedAt) || rec;
   const conn = await getConn();
   const folderId = driveFolderOf(rec);
   if (!conn || !rec.uploaded || !folderId) {
@@ -373,10 +396,14 @@ async function syncPackage(rec, quiet) {
     if (!(v >= 2)) throw new Error(DRIVE_OLD_SCRIPT);
     const [item] = rec.downloadId ? await search({ id: rec.downloadId }) : [];
     const videoName = rec.driveName || (item && item.filename.split(/[\\/]/).pop()) || `${rec.name} ${stampOf(rec.startedAt)}.${extOf(rec)}`;
-    await driveUploadSidecars(conn, rec, videoName, await storedTranscript(rec), { folderId }, true);
+    await driveUploadSidecars(conn, rec, videoName, await storedTranscript(rec), { folderId }, true, trPctOf(rec));
     if (!quiet) toast("Transcript and notes updated on Drive");
   } catch (e) {
-    // Quiet syncs still say so when they fail (e.g. the script needs updating)
+    // Quiet syncs still say so when they fail, but "update your script" only once per visit
+    if (quiet && e.message === DRIVE_OLD_SCRIPT) {
+      if (toldOldScript) return;
+      toldOldScript = true;
+    }
     toast(`Could not update the transcript and notes on Drive: ${e.message}`, true);
   }
 }
@@ -555,6 +582,16 @@ async function buildCard(rec) {
     name.append(chip);
   }
   if (rec.uploaded) name.append(el("span", "chip ok", "On Drive"));
+  if (trProgress.has(rec.startedAt)) {
+    const chip = el("span", "chip warn", `Transcript ${trProgress.get(rec.startedAt)}%`);
+    chip.dataset.tr = rec.startedAt;
+    chip.title = "The transcript is being made" + (rec.uploaded ? ". Drive gets it when it's finished." : "");
+    name.append(chip);
+  } else if (rec.imported && rec.imported.trStatus === "in-progress") {
+    const chip = el("span", "chip warn", "Transcript pending");
+    chip.title = `The sender's transcript was ${rec.imported.trPct || 0}% done when you imported this. Open it to check Drive for the finished one.`;
+    name.append(chip);
+  }
   if (saving) name.append(el("span", "chip warn", "Saving…"));
   else if (!exists) name.append(el("span", "chip warn", rec.localDeleted ? "Removed from this PC" : "File missing"));
   info.append(name);
@@ -851,7 +888,7 @@ function saveMarksSoon(marks) {
 // Runs when the player closes: save pending notes, refresh the list, and send them to Drive if it's there
 function flushMarks() {
   const rec = playerRec;
-  const synced = () => rec && rec.uploaded && syncPackage(rec, true);
+  const synced = () => rec && syncPackage(rec, true);
   if (marksTimer) {
     clearTimeout(marksTimer);
     marksTimer = 0;
@@ -1096,6 +1133,10 @@ let paintPlayerTicks = () => {};
 
 // ---------- transcript (speech-to-text on this PC) ----------
 let trWorker = null;
+let trRec = null; // the recording trWorker is transcribing
+const trProgress = new Map(); // startedAt -> percent, while a transcript is being made
+const trToldDrive = new Map(); // startedAt -> last percent step sent to Drive
+const trPctOf = (rec) => (trProgress.has(rec.startedAt) ? trProgress.get(rec.startedAt) : null);
 let trActive = -1;
 let trSegs = [];
 let trCC = true;
@@ -1137,8 +1178,17 @@ async function loadTranscript(rec) {
   $("tr-bar").hidden = true;
   $("tr-gen").hidden = false;
   $("tr-gen").textContent = "Generate transcript";
+  $("tr-pending").hidden = true;
   const got = (await chrome.storage.local.get(trKey(rec)))[trKey(rec)];
   if (playerRec !== rec) return;
+  // Imported while the sender's transcript was still being made
+  if (!got && rec.imported && rec.imported.trStatus === "in-progress") {
+    $("tr-pending-text").textContent = `The sender's transcript was still being made (${rec.imported.trPct || 0}%) when you imported this.`;
+    $("tr-fetch").hidden = !rec.imported.source;
+    if (!rec.imported.source) $("tr-pending-text").textContent += " Import it again once they've finished, or make your own.";
+    $("tr-pending").hidden = false;
+    $("tr-empty").hidden = true;
+  }
   if (got && got.segments && got.segments.length) {
     renderTranscript(got.segments);
     $("tr-state").textContent = `${got.segments.length} lines`;
@@ -1148,12 +1198,32 @@ async function loadTranscript(rec) {
   }
 }
 
-function stopTranscribe() {
+// finished: the transcript is about to be saved (and sent to Drive), so no "cancelled" update is needed
+function stopTranscribe(finished) {
   if (trWorker) {
     trWorker.terminate();
     trWorker = null;
   }
   $("tr-bar").hidden = true;
+  const rec = trRec;
+  trRec = null;
+  if (rec && trProgress.delete(rec.startedAt)) {
+    const told = trToldDrive.delete(rec.startedAt);
+    render();
+    if (told && !finished) syncPackage(rec, true); // Drive said "in progress": take that back
+  }
+}
+
+// How far the transcript being made right now has got, shown on the card and sent to Drive
+function setTrProgress(rec, pct) {
+  trProgress.set(rec.startedAt, pct);
+  document.querySelectorAll(`[data-tr="${rec.startedAt}"]`).forEach((c) => (c.textContent = `Transcript ${pct}%`));
+  // Tell Drive at the start and every 25%, not on every step
+  const step = Math.floor(pct / 25) * 25;
+  if ((trToldDrive.get(rec.startedAt) ?? -1) < step) {
+    trToldDrive.set(rec.startedAt, step);
+    syncPackage(rec, true);
+  }
 }
 
 async function decodeMono16k(blob) {
@@ -1197,6 +1267,10 @@ async function generateTranscript() {
     if (playerRec !== rec) return;
     const w = new Worker("transcribe-worker.js", { type: "module" });
     trWorker = w;
+    trRec = rec;
+    trProgress.set(rec.startedAt, 0);
+    render();
+    setTrProgress(rec, 0);
     renderTranscript([]);
     w.onmessage = async (e) => {
       const m = e.data;
@@ -1209,15 +1283,16 @@ async function generateTranscript() {
       } else if (m.type === "progress") {
         $("tr-fill").style.width = Math.round((m.done / m.total) * 100) + "%";
         state(`Transcribing… ${Math.round((m.done / m.total) * 100)}%`);
+        setTrProgress(rec, Math.round((m.done / m.total) * 100));
         renderTranscript(m.segments);
         for (const k of ["tr-copy", "tr-vtt", "tr-del"]) $(k).hidden = true;
       } else if (m.type === "done") {
-        stopTranscribe();
+        stopTranscribe(true);
         await chrome.storage.local.set({
           [trKey(rec)]: { model: s.transcriptModel, lang: s.transcriptLang, at: Date.now(), segments: m.segments },
         });
         if (playerRec === rec) loadTranscript(rec);
-        if (rec.uploaded) syncPackage(rec, true);
+        syncPackage(rec, true);
       } else if (m.type === "error") {
         stopTranscribe();
         state("Failed: " + m.message);
@@ -1254,7 +1329,7 @@ $("tr-del").onclick = async () => {
   if (!playerRec || !confirm("Delete this transcript?")) return;
   await chrome.storage.local.remove(trKey(playerRec));
   loadTranscript(playerRec);
-  if (playerRec.uploaded) syncPackage(playerRec, true);
+  syncPackage(playerRec, true);
 };
 $("pl-cc").onclick = () => {
   trCC = !trCC;

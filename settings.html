@@ -24,8 +24,7 @@
     .opt + .opt { border-top: 1px solid var(--border); }
     .opt .tx { flex: 1; } .opt .t { font-weight: 550; font-size: 13.5px; } .opt .d { color: var(--muted); font-size: 12.5px; margin-top: 2px; max-width: 60ch; }
     .opt .d a { color: var(--text); font-weight: 550; }
-    select { height: 34px; padding: 0 30px 0 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; max-width: 260px; }
-    select:focus-visible { outline: none; border-color: var(--text); box-shadow: 0 0 0 3px var(--focus); }
+    .opt .cs { flex: none; max-width: 280px; }
     .sw { position: relative; width: 34px; height: 20px; flex: none; }
     .sw input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
     .sw i { position: absolute; inset: 0; background: var(--border-strong); border-radius: 20px; transition: background .15s; }
@@ -138,6 +137,7 @@
       </div>
     </section>
   </div></main>
+  <script src="select.js"></script>
   <script src="settings-lib.js"></script>
   <script src="settings.js"></script>
 </body>

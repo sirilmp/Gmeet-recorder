@@ -30,7 +30,7 @@
     #quality:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--focus); }
     #quality:disabled { opacity: .5; cursor: default; }
     .qlabels { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--faint); }
-    #micId { margin-top: 10px; height: 32px; font-size: 12.5px; }
+    .row-card .cs { display: flex; margin-top: 10px; }
     #mic-perm { margin-top: 10px; width: 100%; }
     #upload-status { font-size: 12.5px; line-height: 1.55; color: var(--muted); padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-2); }
     #upload-status a { color: var(--text); font-weight: 550; }
@@ -114,7 +114,7 @@
           <input type="checkbox" id="useMic" checked>
           <span class="track"></span>
         </label>
-        <select class="input" id="micId" aria-label="Microphone"></select>
+        <select id="micId" aria-label="Microphone"></select>
         <button class="btn" id="mic-perm" hidden>Allow microphone access</button>
       </div>
 
@@ -150,6 +150,7 @@
     Recordings &amp; Drive upload
     <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
   </button>
+  <script src="select.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

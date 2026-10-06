@@ -145,6 +145,45 @@ svg { width: 18px; height: 18px; flex: none; }
 .input:focus { border-color: var(--text); box-shadow: 0 0 0 3px var(--focus); }
 .input:disabled { opacity: .6; }
 
+/* Custom dropdown (select.js turns every <select> into this) */
+.cs-native { display: none !important; }
+.cs { position: relative; display: inline-flex; max-width: 100%; }
+.cs-btn {
+  display: inline-flex; align-items: center; gap: 8px; width: 100%; min-width: 0;
+  height: 34px; padding: 0 9px 0 11px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text);
+  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+  transition: border-color .12s, box-shadow .12s, background .12s;
+}
+.cs-btn:hover { background: var(--surface-2); }
+.cs-btn:focus-visible, .cs.open .cs-btn { outline: none; border-color: var(--text); box-shadow: 0 0 0 3px var(--focus); background: var(--surface); }
+.cs-btn:disabled { opacity: .55; cursor: default; background: var(--surface); }
+.cs-btn > svg { width: 15px; height: 15px; color: var(--muted); transition: transform .15s; }
+.cs.open .cs-btn > svg { transform: rotate(180deg); }
+/* The value and an invisible stack of every option share one cell, so the button is as wide as the longest option */
+.cs-face { display: grid; flex: 1; min-width: 0; }
+.cs-value, .cs-sizer { grid-area: 1 / 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-sizer { visibility: hidden; height: 0; }
+.cs-sizer span { display: block; }
+.cs-list {
+  position: fixed; z-index: 2147483000; overflow: auto; overscroll-behavior: contain;
+  padding: 4px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); box-shadow: var(--shadow-pop);
+  font: 13px/1.35 var(--font); animation: csIn .12s ease-out;
+}
+.cs-list.up { animation-name: csUp; }
+@keyframes csIn { from { opacity: 0; transform: translateY(-3px); } }
+@keyframes csUp { from { opacity: 0; transform: translateY(3px); } }
+@media (prefers-reduced-motion: reduce) { .cs-list { animation: none; } }
+.cs-opt { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 6px 9px; border-radius: 6px; cursor: pointer; user-select: none; }
+.cs-opt > span { flex: 1; min-width: 0; }
+.cs-opt svg { width: 15px; height: 15px; color: var(--text); visibility: hidden; }
+.cs-opt[aria-selected="true"] { font-weight: 550; }
+.cs-opt[aria-selected="true"] svg { visibility: visible; }
+.cs-opt.active { background: var(--surface-2); }
+.cs-opt[aria-disabled="true"] { opacity: .45; cursor: default; }
+
 /* Toggle switch */
 .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
 .switch input { position: absolute; opacity: 0; pointer-events: none; }

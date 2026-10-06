@@ -26,6 +26,8 @@ let shareLiveReported = false;
 let mixDest = null; // audio mix that goes into the recording
 let shareAudioEl = null;
 let shareAudioNode = null;
+let tabOutEl = null; // plays the meeting sound to my speakers/headset while recording
+let tabOutCtx = null; // fallback for the above
 
 // Loudness meters (peak 0..1) so the popup can show whether a source is really producing sound
 let levelTimers = [];
@@ -361,13 +363,17 @@ async function startRecording(streamId, desktopStreamId, useMic, desktopAudio, m
     tabStream.getVideoTracks()[0].addEventListener("ended", stopRecording);
   }
 
-  // "playback" asks for a larger output buffer than the default (lowest-latency) one. The meeting
-  // sound is played from this hidden page, and with tiny buffers any scheduling hiccup (common with
-  // Bluetooth headsets and when the CPU idles down) is an underrun: stuttering, robotic voices.
-  // A fixed 48 kHz keeps the recording's rate stable even if a headset switches to its low-rate
-  // call mode (16 kHz) mid-recording.
+  // The recording's audio mix runs on Chrome's own clock, not on the speakers/headset. A Web Audio
+  // graph is otherwise driven by the output device, and Bluetooth headsets are a poor clock: once a
+  // mic is open they drop to their call mode (mono, 16 kHz, uneven callbacks), and every hiccup there
+  // became a crackle or a stall in both what I hear and what gets recorded.
+  // The meeting sound I listen to is played separately by a plain <audio> element (below), the same
+  // path Meet itself uses, which copes with Bluetooth call mode and device switches.
+  const silentSink = typeof AudioContext.prototype.setSinkId === "function";
   try {
-    audioCtx = new AudioContext({ latencyHint: "playback", sampleRate: 48000 });
+    audioCtx = silentSink
+      ? new AudioContext({ sinkId: { type: "none" }, sampleRate: 48000 })
+      : new AudioContext({ latencyHint: "playback", sampleRate: 48000 });
   } catch {
     audioCtx = new AudioContext({ latencyHint: "playback" });
   }
@@ -389,8 +395,21 @@ async function startRecording(streamId, desktopStreamId, useMic, desktopAudio, m
   // Tab audio -> recording AND speakers (capturing a tab mutes it otherwise)
   const tabSource = audioCtx.createMediaStreamSource(tabStream);
   tabSource.connect(dest);
-  tabSource.connect(audioCtx.destination);
   watchLevel("tabLevel", tabSource);
+  if (silentSink && tabStream.getAudioTracks().length) {
+    tabOutEl = new Audio();
+    tabOutEl.srcObject = new MediaStream(tabStream.getAudioTracks());
+    tabOutEl.play().catch((e) => {
+      // Shouldn't happen on an extension page; if it does, play through Web Audio as before
+      console.warn("Meeting sound playback failed, using Web Audio:", e);
+      tabOutEl = null;
+      tabOutCtx = new AudioContext({ latencyHint: "playback" });
+      tabOutCtx.createMediaStreamSource(tabStream).connect(tabOutCtx.destination);
+      tabOutCtx.resume().catch(() => {});
+    });
+  } else {
+    tabSource.connect(audioCtx.destination);
+  }
 
   // Your own voice -> recording only (not to speakers, avoids echo)
   micDest = null;
@@ -573,6 +592,10 @@ function cleanup() {
   presentVideo = null;
   presenting = false;
   ctx2d = null;
+  if (tabOutEl) tabOutEl.srcObject = null;
+  tabOutEl = null;
+  if (tabOutCtx) tabOutCtx.close();
+  tabOutCtx = null;
   if (audioCtx) audioCtx.close();
   audioCtx = null;
   mixDest = null;

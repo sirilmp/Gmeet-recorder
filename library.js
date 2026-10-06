@@ -24,6 +24,13 @@ function fmtDuration(ms) {
   return `${Math.floor(s / 3600)}:${p(Math.floor((s % 3600) / 60))}:${p(s % 60)}`;
 }
 
+// 09-02-2026 · 9:01 AM
+function fmtDateTime(ts) {
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}-${p(d.getMonth() + 1)}-${d.getFullYear()} · ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
 function fmtSize(b) {
   return b > 1e9 ? (b / 1e9).toFixed(2) + " GB" : (b / 1e6).toFixed(1) + " MB";
 }
@@ -624,7 +631,7 @@ async function showRecover() {
     const row = el(
       "div",
       "recover",
-      `<div class="rt"><b>Unfinished recording found</b><span>${esc(u.meta ? u.meta.name : "Meeting")} · ${new Date(u.started).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })} · ${fmtSize(u.file.size)}. It was cut short, you can still save what was recorded.</span></div>`
+      `<div class="rt"><b>Unfinished recording found</b><span>${esc(u.meta ? u.meta.name : "Meeting")} · ${fmtDateTime(u.started)} · ${fmtSize(u.file.size)}. It was cut short, you can still save what was recorded.</span></div>`
     );
     const rec = btn(ICON.play, "Recover", "btn-primary", () => recoverFile(u, rec));
     const del = btn(ICON.trash, "Discard", "btn-ghost btn-soft-danger", async () => {
@@ -1075,7 +1082,7 @@ $("pl-video").addEventListener("seeked", syncCaption);
 async function playRecording(rec, item, startAt) {
   const dlg = $("dlg-player");
   $("pl-title").textContent = rec.name;
-  $("pl-sub").textContent = `${new Date(rec.startedAt).toLocaleString()} · ${fmtDuration(rec.durationMs)}`;
+  $("pl-sub").textContent = `${fmtDateTime(rec.startedAt)} · ${fmtDuration(rec.durationMs)}`;
   $("pl-msg").textContent = "";
   $("pl-sys").onclick = () => item && chrome.downloads.open(rec.downloadId);
   $("pl-sys").hidden = !item;

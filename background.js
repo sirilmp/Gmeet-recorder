@@ -291,7 +291,17 @@ async function beginSave({ durationMs, size, ext }) {
 }
 
 // Put the download into Downloads/MeetRecordings and add it to the recordings list.
+// Files this worker saves itself (transcripts): url -> path. Chrome ignores the filename given to
+// downloads.download() once an extension listens to onDeterminingFilename, so it is suggested here.
+const namedDownloads = new Map();
+
 chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  const named = namedDownloads.get(item.url);
+  if (named) {
+    namedDownloads.delete(item.url);
+    suggest({ filename: named, conflictAction: "overwrite" });
+    return;
+  }
   if (!item.url.startsWith(`blob:chrome-extension://${chrome.runtime.id}/`)) return;
   (async () => {
     const { saving, recordings = [] } = await chrome.storage.local.get(["saving", "recordings"]);
@@ -471,11 +481,45 @@ async function onTranscriptMsg(msg) {
     await chrome.storage.local.set({ ["tr-" + id]: { model: p.model, lang: p.lang, at: Date.now(), segments: msg.segments } });
     await chrome.storage.local.remove(trpKey(id));
     await trRemove(id);
+    await saveTranscriptFiles(id, msg.segments).catch((e) => console.warn("transcript files not saved", e));
   } else if (msg.type === "tr-failed") {
     await chrome.storage.local.set({ [trpKey(id)]: { error: msg.error, at: Date.now() } });
     await trRemove(id);
   }
   return {};
+}
+
+// A copy of the transcript next to the video in Downloads/MeetRecordings, so it outlives the extension:
+// "<video name>.txt" to read, "<video name>.vtt" that video players pick up as subtitles.
+async function saveTranscriptFiles(id, segments) {
+  if (!segments || !segments.length) return;
+  const { recordings = [] } = await chrome.storage.local.get("recordings");
+  const rec = recordings.find((r) => r.startedAt === id);
+  if (!rec) return;
+  const [item] = await chrome.downloads.search({ id: rec.downloadId });
+  const video = item && item.filename ? item.filename.split(/[\\/]/).pop() : `${safeName(rec.name)} ${stamp(rec.startedAt)}.${rec.ext || "webm"}`;
+  const base = `${FOLDER}/${video.replace(/\.[^.]+$/, "")}`;
+  const p = (n, w = 2) => String(n).padStart(w, "0");
+  const clock = (s) => {
+    const ms = Math.round(s * 1000);
+    return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:${p(Math.floor(ms / 1000) % 60)}`;
+  };
+  const vttTime = (s) => `${clock(s)}.${p(Math.round(s * 1000) % 1000, 3)}`;
+  const txt = segments.map((x) => `[${clock(x.s)}] ${x.t}`).join("\n") + "\n";
+  const vtt = "WEBVTT\n\n" + segments.map((x, i) => `${i + 1}\n${vttTime(x.s)} --> ${vttTime(Math.max(x.e, x.s))}\n${x.t}\n`).join("\n");
+  // the service worker can't make blob: URLs, a data: URL is fine at transcript sizes
+  const save = async (body, ext, type) => {
+    const url = `data:${type};charset=utf-8,` + encodeURIComponent(body);
+    namedDownloads.set(url, `${base}.${ext}`);
+    try {
+      // "overwrite": a Redo replaces the old files
+      await chrome.downloads.download({ url, filename: `${base}.${ext}`, conflictAction: "overwrite", saveAs: false });
+    } finally {
+      setTimeout(() => namedDownloads.delete(url), 60_000);
+    }
+  };
+  await save(txt, "txt", "text/plain");
+  await save(vtt, "vtt", "text/vtt");
 }
 
 chrome.runtime.onStartup.addListener(async () => {

@@ -206,12 +206,17 @@ async function dropKept(rec) {
 async function pruneKept() {
   try {
     const recs = await getRecords();
-    const wanted = new Set(recs.filter((r) => !r.uploaded).map((r) => `keep-${r.startedAt}.${extOf(r)}`));
+    // recordings waiting for a transcript are read from these copies too
+    const { trQueue = [] } = await chrome.storage.local.get("trQueue");
+    const queued = new Set(trQueue.map((x) => x.id));
+    const wanted = new Set(recs.filter((r) => !r.uploaded || queued.has(r.startedAt)).map((r) => `keep-${r.startedAt}.${extOf(r)}`));
     const root = await navigator.storage.getDirectory();
     for await (const [name, h] of root.entries()) {
+      // trsrc-*: a copy made just for a transcript, gone once it is no longer queued
+      if (name.startsWith("trsrc-") && !queued.has(parseInt(name.slice(6), 10))) await root.removeEntry(name).catch(() => {});
       if (!name.startsWith("keep-")) continue;
       const age = Date.now() - parseInt(name.slice(5), 10);
-      if (!wanted.has(name) || !(age < KEEP_DAYS * 864e5)) await root.removeEntry(name).catch(() => {});
+      if (!wanted.has(name) || !(age < KEEP_DAYS * 864e5 || queued.has(parseInt(name.slice(5), 10)))) await root.removeEntry(name).catch(() => {});
     }
   } catch {}
 }
@@ -482,6 +487,10 @@ async function buildCard(rec) {
   const name = el("div", "name", `<span>${esc(rec.name)}</span>`);
   name.append(el("span", "chip tab", rec.mode === "screen" ? "Screen" : "Meet tab"));
   if (rec.uploaded) name.append(el("span", "chip ok", "On Drive"));
+  const trChip = el("span", "chip tab");
+  trChip.dataset.tr = rec.startedAt;
+  trChip.hidden = true;
+  name.append(trChip);
   if (saving) name.append(el("span", "chip warn", "Saving…"));
   else if (!exists) name.append(el("span", "chip warn", rec.localDeleted ? "Removed from this PC" : "File missing"));
   info.append(name);
@@ -534,6 +543,7 @@ async function buildCard(rec) {
       if (!confirm(`Delete "${rec.name}"${exists ? " and its file from disk" : ""}?`)) return;
       if (exists) await new Promise((r) => chrome.downloads.removeFile(rec.downloadId, r));
       await removeRecord(rec.downloadId);
+      bgSend({ type: "tr-cancel", id: rec.startedAt });
       dropKept(rec);
       render();
     })
@@ -591,6 +601,7 @@ async function render() {
   $("stat-size").textContent = fmtSize(all.reduce((n, r) => n + (r.size || 0), 0));
   $("empty").hidden = all.length > 0;
   $("list").replaceChildren(frag);
+  paintTrChips();
   for (const id of uploading.keys()) showProgress(id);
   document.querySelectorAll("progress[data-up]").forEach((p) => (p.hidden = !uploading.has(+p.dataset.up)));
 }
@@ -737,14 +748,10 @@ function closePlayer() {
   playerUrl = null;
   playerRec = null;
   playerBlob = null;
-  stopTranscribe();
   $("pl-cap").hidden = true;
   if ($("dlg-player").open) $("dlg-player").close();
 }
-$("pl-close").onclick = () => {
-  if (trWorker && !confirm("The transcript is still being made. Stop it and close?")) return;
-  closePlayer();
-};
+$("pl-close").onclick = closePlayer; // a transcript being made carries on in the background
 $("dlg-player").addEventListener("cancel", (e) => {
   e.preventDefault();
   if (document.fullscreenElement) return;
@@ -887,7 +894,9 @@ let paintPlayerTicks = () => {};
 })();
 
 // ---------- transcript (speech-to-text on this PC) ----------
-let trWorker = null;
+// Transcripts are made in the background (transcriber.js in the recorder's offscreen page, queued by
+// background.js), so they keep going when the player or the library is closed. This panel only shows
+// the state kept in storage: tr-<id> (done), trp-<id> (progress or error), trQueue and trState.
 let trActive = -1;
 let trSegs = [];
 let trCC = true;
@@ -898,17 +907,22 @@ const vttTime = (s) => {
   const p = (n, w = 2) => String(n).padStart(w, "0");
   return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:${p(Math.floor(ms / 1000) % 60)}.${p(ms % 1000, 3)}`;
 };
+const bgSend = (msg) => chrome.runtime.sendMessage({ target: "background", ...msg }).catch(() => null);
 
-function renderTranscript(segs) {
-  trSegs = segs || [];
-  trActive = -1;
-  const list = $("tr-list");
-  list.replaceChildren();
+function renderTranscript(segs, busy = false) {
+  segs = segs || [];
+  for (const k of ["tr-copy", "tr-vtt", "tr-del"]) $(k).hidden = !segs.length || busy;
+  // progress updates re-read the same lines: only rebuild the list when it actually grew
+  const same = segs.length === trSegs.length && (!segs.length || segs[segs.length - 1].s === trSegs[trSegs.length - 1].s);
+  trSegs = segs;
   const has = trSegs.length > 0;
-  list.hidden = !has;
   $("pl-cc").hidden = !has;
   $("pl-cc").classList.toggle("on", has && trCC);
-  for (const k of ["tr-copy", "tr-vtt", "tr-del"]) $(k).hidden = !has || !!trWorker;
+  const list = $("tr-list");
+  list.hidden = !has;
+  if (same && list.childElementCount === trSegs.length) return;
+  trActive = -1;
+  list.replaceChildren();
   for (const sg of trSegs) {
     const row = el("div", "tr-line");
     row.dataset.s = sg.s;
@@ -920,113 +934,91 @@ function renderTranscript(segs) {
     };
     list.append(row);
   }
+  syncCaption();
 }
 
 async function loadTranscript(rec) {
-  renderTranscript([]);
-  $("tr-state").textContent = "";
-  $("tr-bar").hidden = true;
-  $("tr-gen").hidden = false;
-  $("tr-gen").textContent = "Generate transcript";
-  const got = (await chrome.storage.local.get(trKey(rec)))[trKey(rec)];
+  const id = rec.startedAt;
+  const got = await chrome.storage.local.get([trKey(rec), "trp-" + id, "trQueue", "trState"]);
   if (playerRec !== rec) return;
-  if (got && got.segments && got.segments.length) {
-    renderTranscript(got.segments);
-    $("tr-state").textContent = `${got.segments.length} lines`;
-    $("tr-gen").textContent = "Redo";
-  } else if (got) {
-    $("tr-state").textContent = "No speech was found.";
-  }
-}
-
-function stopTranscribe() {
-  if (trWorker) {
-    trWorker.terminate();
-    trWorker = null;
-  }
-  $("tr-bar").hidden = true;
-}
-
-async function decodeMono16k(blob) {
-  const ctx = new AudioContext({ sampleRate: 16000 });
-  try {
-    const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
-    const n = buf.numberOfChannels;
-    const out = new Float32Array(buf.length);
-    for (let c = 0; c < n; c++) {
-      const d = buf.getChannelData(c);
-      for (let i = 0; i < d.length; i++) out[i] += d[i] / n;
-    }
-    return out;
-  } finally {
-    ctx.close();
-  }
-}
-
-async function generateTranscript() {
-  if (trWorker) {
-    // the button doubles as Cancel while running
-    stopTranscribe();
-    $("tr-state").textContent = "Stopped.";
-    $("tr-gen").textContent = trSegs.length ? "Redo" : "Generate transcript";
-    renderTranscript(trSegs);
-    return;
-  }
-  const rec = playerRec;
-  const blob = playerBlob;
-  if (!rec || !blob) return;
-  const s = await getSettings();
+  const done = got[trKey(rec)];
+  const prog = got["trp-" + id];
+  const ahead = (got.trQueue || []).findIndex((x) => x.id === id);
+  const st = got.trState && got.trState.id === id ? got.trState : null;
   const state = (t) => ($("tr-state").textContent = t);
-  $("tr-gen").textContent = "Cancel";
-  $("tr-bar").hidden = false;
-  $("tr-fill").style.width = "0%";
-  for (const k of ["tr-copy", "tr-vtt", "tr-del"]) $(k).hidden = true;
-  try {
-    state("Reading the audio…");
-    const audio = await decodeMono16k(blob);
-    if (playerRec !== rec) return;
-    const w = new Worker("transcribe-worker.js", { type: "module" });
-    trWorker = w;
+  $("tr-bar").hidden = !st;
+  if (st) $("tr-fill").style.width = (st.pct || 0) + "%";
+  if (ahead >= 0) {
+    // waiting or being made: show the lines found so far
+    renderTranscript((prog && prog.segments) || [], true);
+    $("tr-gen").textContent = "Cancel";
+    if (st) state(st.text || "Working…");
+    else if (ahead === 0) state("Starting…");
+    else state(`Waiting for ${ahead} other recording${ahead > 1 ? "s" : ""}…`);
+  } else if (done) {
+    renderTranscript(done.segments);
+    state(done.segments && done.segments.length ? `${done.segments.length} lines` : "No speech was found.");
+    $("tr-gen").textContent = "Redo";
+  } else {
     renderTranscript([]);
-    w.onmessage = async (e) => {
-      const m = e.data;
-      if (trWorker !== w) return;
-      if (m.type === "status") state(m.text);
-      else if (m.type === "download") {
-        const pct = m.total ? Math.round((m.loaded / m.total) * 100) : 0;
-        state(`Downloading the speech model (once)… ${pct}%`);
-        $("tr-fill").style.width = pct + "%";
-      } else if (m.type === "progress") {
-        $("tr-fill").style.width = Math.round((m.done / m.total) * 100) + "%";
-        state(`Transcribing… ${Math.round((m.done / m.total) * 100)}%`);
-        renderTranscript(m.segments);
-        for (const k of ["tr-copy", "tr-vtt", "tr-del"]) $(k).hidden = true;
-      } else if (m.type === "done") {
-        stopTranscribe();
-        await chrome.storage.local.set({
-          [trKey(rec)]: { model: s.transcriptModel, lang: s.transcriptLang, at: Date.now(), segments: m.segments },
-        });
-        if (playerRec === rec) loadTranscript(rec);
-      } else if (m.type === "error") {
-        stopTranscribe();
-        state("Failed: " + m.message);
-        $("tr-gen").textContent = "Try again";
-      }
-    };
-    w.onerror = (e) => {
-      stopTranscribe();
-      state("Failed: " + (e.message || "the speech engine could not start"));
-      $("tr-gen").textContent = "Try again";
-    };
-    w.postMessage({ type: "run", audio, model: s.transcriptModel, language: s.transcriptLang }, [audio.buffer]);
-  } catch (e) {
-    stopTranscribe();
-    state("Couldn't read this recording's audio: " + e.message);
-    $("tr-gen").textContent = "Try again";
+    state(prog && prog.error ? "Failed: " + prog.error : "");
+    $("tr-gen").textContent = prog && prog.error ? "Try again" : "Generate transcript";
   }
 }
 
-$("tr-gen").onclick = generateTranscript;
+// Start (or cancel) a transcript of the open recording
+$("tr-gen").onclick = async () => {
+  const rec = playerRec;
+  if (!rec) return;
+  const gen = $("tr-gen");
+  gen.disabled = true;
+  try {
+    const { trQueue = [] } = await chrome.storage.local.get("trQueue");
+    if (trQueue.some((x) => x.id === rec.startedAt)) {
+      await bgSend({ type: "tr-cancel", id: rec.startedAt });
+      return;
+    }
+    // Older recordings have no copy inside the extension: give the background one to read
+    if (!(await keptFile(rec))) {
+      if (!playerBlob) return;
+      $("tr-state").textContent = "Preparing…";
+      const root = await navigator.storage.getDirectory();
+      const h = await root.getFileHandle(`trsrc-${rec.startedAt}.${extOf(rec)}`, { create: true });
+      await playerBlob.stream().pipeTo(await h.createWritable());
+    }
+    await bgSend({ type: "tr-add", id: rec.startedAt, ext: extOf(rec), front: true });
+  } catch (e) {
+    $("tr-state").textContent = "Couldn't start: " + e.message;
+  } finally {
+    gen.disabled = false;
+    if (playerRec === rec) loadTranscript(rec);
+  }
+};
+
+// Live updates from the background job, for the open player and the list
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (playerRec) {
+    const id = playerRec.startedAt;
+    if (changes.trQueue || changes.trState || changes["tr-" + id] || changes["trp-" + id]) loadTranscript(playerRec);
+  }
+  if (changes.trQueue || changes.trState) paintTrChips();
+});
+
+// "Transcribing 40%" / "Transcript queued" on the cards
+async function paintTrChips() {
+  const { trQueue = [], trState } = await chrome.storage.local.get(["trQueue", "trState"]);
+  for (const c of document.querySelectorAll("[data-tr]")) {
+    const id = +c.dataset.tr;
+    const at = trQueue.findIndex((x) => x.id === id);
+    c.hidden = at < 0;
+    if (at < 0) continue;
+    if (trState && trState.id === id)
+      c.textContent = trState.phase === "paused" ? "Transcript paused" : trState.phase === "transcribing" ? `Transcribing ${trState.pct}%` : "Transcribing…";
+    else c.textContent = "Transcript queued";
+  }
+}
+
 $("tr-copy").onclick = async () => {
   await navigator.clipboard.writeText(trSegs.map((x) => `[${stamp(x.s)}] ${x.t}`).join("\n"));
   toast("Transcript copied");
@@ -1090,7 +1082,7 @@ async function playRecording(rec, item, startAt) {
   playerRec = rec;
   v.removeAttribute("src");
   // bookmark chips jump inside the open player
-  stopTranscribe();
+  trSegs = [];
   loadTranscript(rec);
   const box = $("pl-marks");
   box.replaceChildren();
@@ -1128,6 +1120,7 @@ async function playRecording(rec, item, startAt) {
 $("search").oninput = () => render();
 renderDriveBtn();
 pruneKept().then(showRecover);
+bgSend({ type: "tr-kick" }); // carries on a transcript that was interrupted (e.g. the browser closed)
 runCleanup().then((n) => n && render()).catch(() => {});
 render();
 chrome.downloads.onChanged.addListener(() => render());

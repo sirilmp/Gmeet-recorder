@@ -1,3 +1,5 @@
+importScripts("settings-lib.js");
+
 const OFFSCREEN_URL = "offscreen.html";
 const FOLDER = "MeetRecordings"; // inside the browser's Downloads folder
 
@@ -9,8 +11,8 @@ async function ensureOffscreen() {
   await chrome.offscreen.createDocument({
     url: OFFSCREEN_URL,
     // No AUDIO_PLAYBACK: Chrome closes such documents after ~30s of silence, which would kill the recording
-    reasons: ["USER_MEDIA"],
-    justification: "Record the Meet tab and microphone with MediaRecorder",
+    reasons: ["USER_MEDIA", "WORKERS"],
+    justification: "Record the Meet tab and microphone, and make transcripts of finished recordings",
   });
 }
 
@@ -308,6 +310,7 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
       });
       await chrome.storage.local.set({ recordings });
       await chrome.storage.local.remove("saving");
+      if ((await getSettings()).autoTranscribe) trAdd(saving.startedAt, saving.ext).catch(() => {});
     }
     suggest({
       filename: `${FOLDER}/${saving ? saving.filename : item.filename}`,
@@ -363,7 +366,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       } else if (msg.type === "reset") {
         await chrome.offscreen.closeDocument().catch(() => {});
         await setState(false);
-      }
+        await trKick(); // a transcript that was running goes on from its last saved slice
+      } else if (msg.type.startsWith("tr-")) Object.assign(out, await onTranscriptMsg(msg));
       sendResponse(out);
     } catch (e) {
       // The popup may have closed (screen picker took focus), so keep the error for its next open
@@ -374,5 +378,112 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true;
 });
 
-chrome.runtime.onStartup.addListener(() => setState(false));
-chrome.runtime.onInstalled.addListener(() => setState(false));
+// ---------- transcripts, made in the background ----------
+// The offscreen page does the work (transcriber.js); this worker owns the bookkeeping, since that page
+// can't use chrome.storage. In chrome.storage.local:
+//   trQueue: [{id, ext}]   recordings waiting for a transcript, the first one is being worked on
+//   trp-<id>: {model, lang, doneSec, segments} progress so far, or {error} if it failed
+//   trState: {id, phase, pct, text}   what the running job is doing, for the library
+//   tr-<id>: {model, lang, at, segments}   the finished transcript (read by the library)
+// (id = the recording's startedAt)
+const trpKey = (id) => "trp-" + id;
+
+async function trKick() {
+  const { recording } = await chrome.storage.session.get("recording");
+  if (recording) return; // resumes when the recording is saved
+  const { trQueue = [] } = await chrome.storage.local.get("trQueue");
+  if (!trQueue.length) return;
+  await ensureOffscreen();
+  await chrome.runtime.sendMessage({ target: "offscreen", type: "tr-kick" }).catch(() => {});
+}
+
+// front: the user asked for it in the player, so it goes right after the one running now
+async function trAdd(id, ext, front = false) {
+  const { trQueue = [] } = await chrome.storage.local.get("trQueue");
+  if (!trQueue.some((x) => x.id === id)) {
+    trQueue.splice(front ? Math.min(1, trQueue.length) : trQueue.length, 0, { id, ext: ext === "mp4" ? "mp4" : "webm" });
+    await chrome.storage.local.remove(trpKey(id)); // a fresh start (also clears an old error)
+    await chrome.storage.local.set({ trQueue });
+  }
+  await trKick();
+}
+
+async function trRemove(id) {
+  const { trQueue = [], trState } = await chrome.storage.local.get(["trQueue", "trState"]);
+  await chrome.storage.local.set({ trQueue: trQueue.filter((x) => x.id !== id) });
+  if (trState && trState.id === id) await chrome.storage.local.remove("trState");
+}
+
+// true while id is still the job at the head of the queue (a cancel may have dropped it)
+async function trIsCurrent(id) {
+  const { trQueue = [] } = await chrome.storage.local.get("trQueue");
+  return !!trQueue.length && trQueue[0].id === id;
+}
+
+async function trNext() {
+  const { recording } = await chrome.storage.session.get("recording");
+  if (recording) return null;
+  for (;;) {
+    const { trQueue = [], recordings = [] } = await chrome.storage.local.get(["trQueue", "recordings"]);
+    if (!trQueue.length) {
+      await chrome.storage.local.remove("trState");
+      return null;
+    }
+    const job = trQueue[0];
+    const rec = recordings.find((r) => r.startedAt === job.id);
+    if (!rec) {
+      await trRemove(job.id); // deleted from the library meanwhile
+      continue;
+    }
+    let p = (await chrome.storage.local.get(trpKey(job.id)))[trpKey(job.id)];
+    if (!p || p.error) {
+      const s = await getSettings();
+      p = { model: s.transcriptModel, lang: s.transcriptLang, doneSec: 0, segments: [] };
+      await chrome.storage.local.set({ [trpKey(job.id)]: p });
+    }
+    const durationSec = (rec.durationMs || 0) / 1000;
+    const pct = durationSec ? Math.min(99, Math.round((p.doneSec / durationSec) * 100)) : 0;
+    await chrome.storage.local.set({ trState: { id: job.id, phase: "reading", pct, text: "Reading the audio…" } });
+    return { id: job.id, ext: job.ext, durationSec, model: p.model, lang: p.lang, doneSec: p.doneSec, segments: p.segments };
+  }
+}
+
+async function onTranscriptMsg(msg) {
+  const id = msg.id;
+  if (msg.type === "tr-add") await trAdd(id, msg.ext, !!msg.front);
+  else if (msg.type === "tr-kick") await trKick();
+  else if (msg.type === "tr-cancel") {
+    const { trState } = await chrome.storage.local.get("trState");
+    await trRemove(id);
+    await chrome.storage.local.remove(trpKey(id));
+    if (trState && trState.id === id) await chrome.runtime.sendMessage({ target: "offscreen", type: "tr-abort", id }).catch(() => {});
+  } else if (msg.type === "tr-next") return { ...(await trNext()) };
+  else if (!(await trIsCurrent(id))) return {}; // late report for a job that was cancelled
+  else if (msg.type === "tr-state") await chrome.storage.local.set({ trState: { id, phase: msg.phase, pct: msg.pct, text: msg.text } });
+  else if (msg.type === "tr-progress") {
+    const p = (await chrome.storage.local.get(trpKey(id)))[trpKey(id)] || {};
+    await chrome.storage.local.set({
+      [trpKey(id)]: { ...p, doneSec: msg.doneSec, segments: msg.segments },
+      trState: { id, phase: "transcribing", pct: msg.pct, text: `Transcribing… ${msg.pct}%` },
+    });
+  } else if (msg.type === "tr-done") {
+    const p = (await chrome.storage.local.get(trpKey(id)))[trpKey(id)] || {};
+    await chrome.storage.local.set({ ["tr-" + id]: { model: p.model, lang: p.lang, at: Date.now(), segments: msg.segments } });
+    await chrome.storage.local.remove(trpKey(id));
+    await trRemove(id);
+  } else if (msg.type === "tr-failed") {
+    await chrome.storage.local.set({ [trpKey(id)]: { error: msg.error, at: Date.now() } });
+    await trRemove(id);
+  }
+  return {};
+}
+
+chrome.runtime.onStartup.addListener(async () => {
+  await setState(false);
+  await chrome.storage.local.remove("trState");
+  await trKick(); // finish transcripts the browser closed on
+});
+chrome.runtime.onInstalled.addListener(async () => {
+  await setState(false);
+  await trKick();
+});

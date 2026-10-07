@@ -213,18 +213,21 @@
     $("pip").title = "Put this bar back on the Meet page";
     w.addEventListener("keydown", markKey, true);
     let sizeTimer;
+    const saveSize = () => {
+      clearTimeout(sizeTimer);
+      if (w.closed || !w.innerWidth || !w.innerHeight) return;
+      pipSize = reqSize = { w: w.innerWidth, h: w.innerHeight };
+      chrome.storage.local.set({ pipSize });
+    };
     w.addEventListener("resize", () => {
       fitPip();
       clearTimeout(sizeTimer);
-      sizeTimer = setTimeout(() => {
-        if (w.closed || !w.innerWidth || !w.innerHeight) return;
-        pipSize = reqSize = { w: w.innerWidth, h: w.innerHeight };
-        chrome.storage.local.set({ pipSize });
-      }, 400);
+      sizeTimer = setTimeout(saveSize, 400);
     });
     fitPip();
     w.addEventListener("pagehide", () => {
       if (pipWin !== w) return;
+      saveSize(); // flush a resize still waiting on its debounce when the window closes
       pipWin = null;
       root.append($("bar"), $("note"));
       $("pip").title = "Pop out: keep this bar on top of every tab and window";

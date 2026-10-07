@@ -39,6 +39,12 @@ async function renderDiag() {
   if (diag.disk === "full") row("bad", "Disk space", "Full, saved", "", "", "Recording stopped to protect the file. Free some space.");
   else if (diag.disk === "low") row("bad", "Disk space", "Low", "", "", "Under about 1.2 GB left. Free some space.");
 
+  if (diag.qualityAdjusted) row("idle", "Quality", "Lowered automatically", "", "", clean(diag.qualityAdjusted));
+  if (diag.engine && diag.engine !== "fallback" && !diag.engine.startsWith("GPU"))
+    row("bad", "Video encoder", "CPU (software)", "", "", "No hardware encoder found; heavier on the CPU than usual. Pick a lower quality in Settings if the PC feels sluggish.");
+  else if (diag.engine === "fallback")
+    row("bad", "Video encoder", "CPU (compatibility mode)", "", "", "Couldn't use the fast recorder; falling back is heavier on the CPU. Pick a lower quality in Settings if the PC feels sluggish.");
+
   if (diag.audio && diag.audio !== "running") row("bad", "Audio engine", clean(diag.audio));
 
   const micTip = diag.micName ? clean(diag.micName) + (diag.micAuto ? " (same as Meet)" : "") : "";

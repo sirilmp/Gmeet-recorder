@@ -321,9 +321,24 @@ async function onShareSignal(m, tabId) {
 }
 
 // ---------- recording ----------
+// Picking a quality the GPU can actually encode (highest down to lowest) avoids the heavy software
+// fallback that kicks in later if the chosen size has no hardware encoder on this PC.
+const QUALITY_ORDER = ["max", "ultra", "high", "standard", "light", "low"];
+async function pickQuality(requested) {
+  const start = QUALITY[requested] ? requested : "standard";
+  let picked = start;
+  if (MeetEngine.supported()) {
+    let idx = QUALITY_ORDER.indexOf(start);
+    while (idx < QUALITY_ORDER.length - 1 && !(await MeetEngine.hardwareSupported(QUALITY[QUALITY_ORDER[idx]].w, QUALITY[QUALITY_ORDER[idx]].h))) idx++;
+    picked = QUALITY_ORDER[idx];
+  }
+  if (picked !== start) diag({ qualityAdjusted: `${start} → ${picked} (no GPU video encoder on this PC at ${start})` });
+  return QUALITY[picked];
+}
+
 async function startRecording(streamId, desktopStreamId, useMic, desktopAudio, micId, presentStreamId, quality) {
   if (recorder) throw new Error("Already recording.");
-  const q = QUALITY[quality] || QUALITY.standard;
+  const q = await pickQuality(quality);
   W = q.w;
   H = q.h;
   FPS = q.fps;

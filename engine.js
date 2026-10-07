@@ -18,6 +18,25 @@ const MeetEngine = {
     return px <= 1920 * 1088 ? "avc1.640028" : px <= 2560 * 1440 ? "avc1.640032" : "avc1.640034";
   },
 
+  // Whether this PC can encode this size on its GPU. Used to pick a quality the hardware can actually
+  // handle before capture starts, instead of silently falling back to a heavy software encode later.
+  async hardwareSupported(w, h) {
+    if (!MeetEngine.supported()) return false;
+    try {
+      const support = await VideoEncoder.isConfigSupported({
+        codec: MeetEngine.videoCodec(w, h),
+        width: w,
+        height: h,
+        bitrate: 1_000_000,
+        framerate: 30,
+        hardwareAcceleration: "prefer-hardware",
+      });
+      return !!support.supported && (support.config.hardwareAcceleration || "") !== "prefer-software";
+    } catch {
+      return false;
+    }
+  },
+
   // opts: { videoTrack, audioTrack, writable, fps, vbps, abps, sampleRate, channels }
   // Returns { stop(): Promise, stats(): {...} }. Throws if this PC can't encode what was asked.
   async create(opts) {

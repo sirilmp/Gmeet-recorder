@@ -697,7 +697,16 @@ async function finish() {
     let stored = null;
     if (writable) {
       await writeChain;
-      if (!engine) await writable.close(); // the engine closes its own file
+      // The engine closes its own file; after an encoder error it can reject stop() even though it
+      // already finalized and closed the file cleanly, so this close may legitimately be redundant
+      // (already-closed is not a real failure: whatever was written is safely on disk either way).
+      if (!engine) {
+        try {
+          await writable.close();
+        } catch (e) {
+          console.warn("writable already closed", e);
+        }
+      }
       writable = null;
       // disk-backed, not loaded into RAM; the type is needed for the Drive upload
       blob = new Blob([await fileHandle.getFile()], { type: `video/${fileExt}` });

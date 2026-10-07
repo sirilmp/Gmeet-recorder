@@ -218,7 +218,7 @@
       clearTimeout(sizeTimer);
       sizeTimer = setTimeout(() => {
         if (w.closed || !w.innerWidth || !w.innerHeight) return;
-        pipSize = { w: w.innerWidth, h: w.innerHeight };
+        pipSize = reqSize = { w: w.innerWidth, h: w.innerHeight };
         chrome.storage.local.set({ pipSize });
       }, 400);
     });
@@ -337,13 +337,13 @@
   }
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.settings) applyVisibility();
-    if (area === "local" && changes.pipSize && changes.pipSize.newValue) pipSize = changes.pipSize.newValue;
+    if (area === "local" && changes.pipSize && changes.pipSize.newValue) pipSize = reqSize = changes.pipSize.newValue;
     if (area === "session") sync();
   });
 
   chrome.storage.local.get(["dockPos", "pipSize"]).then(({ dockPos, pipSize: size }) => {
     if (dockPos) pos = dockPos;
-    if (size && size.w > 0 && size.h > 0) pipSize = size;
+    if (size && size.w > 0 && size.h > 0) pipSize = reqSize = size;
     applyVisibility();
   });
 })();

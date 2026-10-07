@@ -24,6 +24,7 @@ async function init() {
   const s = await getSettings();
   $("showDock").checked = s.showDock;
   $("dockAutoPip").checked = s.dockAutoPip;
+  $("hideMeetTranslate").checked = s.hideMeetTranslate;
   $("autoUpload").checked = s.autoUpload;
   $("autoTranscribe").checked = s.autoTranscribe;
   $("deleteUploaded").checked = s.deleteUploaded;
@@ -45,6 +46,10 @@ $("dockAutoPip").onchange = async () => {
 };
 $("showDock").onchange = async () => {
   await saveSettings({ showDock: $("showDock").checked });
+  saved();
+};
+$("hideMeetTranslate").onchange = async () => {
+  await saveSettings({ hideMeetTranslate: $("hideMeetTranslate").checked });
   saved();
 };
 $("autoUpload").onchange = async () => {

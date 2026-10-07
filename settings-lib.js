@@ -2,6 +2,7 @@
 const SETTINGS_DEFAULTS = {
   showDock: true, // floating Stop / Bookmark bar on the Meet page while recording
   dockAutoPip: true, // pop that bar out into an always-on-top window when I switch away from the Meet tab or present
+  hideMeetTranslate: true, // hide Meet's own "Translating captions" panel, even when it's stuck showing
   autoUpload: false, // upload to Drive (through the saved script connection) when a recording ends
   deleteUploaded: false, // remove the local file once it is safely on Drive
   deleteAfterDays: 0, // remove local files older than this many days (0 = never)

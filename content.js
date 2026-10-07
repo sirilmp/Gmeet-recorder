@@ -49,6 +49,53 @@ function inCall() {
   return !!document.querySelector('[aria-label*="Leave call" i], [data-tooltip*="Leave call" i]');
 }
 
+// ---- hide Meet's own "Translating captions" panel ----
+// Not ours: Meet's live-translation panel can stay stuck on screen (bottom-center) even after
+// captions/translation are turned off in Meet's own settings. Found by its "Translating" label,
+// since the panel's own classes are unnamed and can change with any Meet release.
+function findTranslatePanel() {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, {
+    acceptNode: (el) => (el.children.length === 0 && el.textContent.trim() === "Translating" ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP),
+  });
+  let el = walker.nextNode();
+  if (!el) return null;
+  for (let i = 0; i < 8 && el.parentElement; i++) {
+    el = el.parentElement;
+    const pos = getComputedStyle(el).position;
+    if (pos === "fixed" || pos === "absolute") return el;
+  }
+  return null;
+}
+let hideTranslate = true;
+let translateObserver;
+function applyTranslateHide() {
+  if (!hideTranslate || !document.body) return;
+  const panel = findTranslatePanel();
+  if (panel && panel.style.display !== "none") panel.style.setProperty("display", "none", "important");
+}
+function watchTranslatePanel() {
+  if (!hideTranslate || translateObserver || !document.body) return;
+  applyTranslateHide();
+  translateObserver = new MutationObserver(applyTranslateHide);
+  translateObserver.observe(document.body, { childList: true, subtree: true });
+}
+if (window === window.top) {
+  chrome.storage.local.get("settings").then(({ settings = {} }) => {
+    hideTranslate = settings.hideMeetTranslate !== false;
+    if (document.body) watchTranslatePanel();
+    else document.addEventListener("DOMContentLoaded", watchTranslatePanel, { once: true });
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes.settings) return;
+    hideTranslate = changes.settings.newValue ? changes.settings.newValue.hideMeetTranslate !== false : true;
+    if (hideTranslate) watchTranslatePanel();
+    else if (translateObserver) {
+      translateObserver.disconnect();
+      translateObserver = null;
+    }
+  });
+}
+
 if (window === window.top) {
   setInterval(() => {
     if (recording) {
